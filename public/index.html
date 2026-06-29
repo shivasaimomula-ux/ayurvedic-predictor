@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayurvedic Predictive Model</title>
+<style>
+  :root{--bg:#f6f7f5;--card:#fff;--ink:#1f2a26;--muted:#6b7a73;--line:#e3e8e4;
+        --teal:#0d7a6e;--teal-d:#0a5f56;--green:#15803d;--amber:#b45309;--red:#b91c1c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5}
+  .wrap{max-width:760px;margin:0 auto;padding:2.2rem 1.2rem 4rem}
+  h1{font-size:1.5rem;font-weight:600;margin:0 0 .25rem}
+  .sub{color:var(--muted);font-size:.9rem;margin:0 0 1.6rem}
+  .search{display:flex;gap:.6rem}
+  input{flex:1;padding:.8rem 1rem;font-size:1rem;border:1px solid var(--line);
+        border-radius:10px;background:var(--card)}
+  input:focus{outline:none;border-color:var(--teal)}
+  button{padding:.8rem 1.3rem;font-size:1rem;font-weight:600;color:#fff;background:var(--teal);
+         border:none;border-radius:10px;cursor:pointer}
+  button:hover{background:var(--teal-d)} button:disabled{opacity:.55;cursor:not-allowed}
+  .chips{margin:.8rem 0 0;display:flex;flex-wrap:wrap;gap:.4rem}
+  .chip{font-size:.8rem;color:var(--teal-d);background:#e6f1ef;border:1px solid #cfe5e0;
+        padding:.25rem .65rem;border-radius:999px;cursor:pointer}
+  .chip:hover{background:#d8eae5}
+  .note{font-size:.8rem;color:var(--muted);margin-top:.7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:1.3rem 1.4rem;margin-top:1.4rem}
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;text-transform:uppercase;
+         letter-spacing:.03em;padding:.2rem .6rem;border-radius:999px}
+  .b-green{background:#e7f3ec;color:var(--green)} .b-amber{background:#fdf0e3;color:var(--amber)}
+  .b-grey{background:#eef1ef;color:var(--muted)}
+  .rx{font-size:1.25rem;font-weight:600;margin:.7rem 0 .1rem}
+  .meta{font-size:.85rem;color:var(--muted);margin:.15rem 0}
+  .claim{border-left:3px solid var(--teal);padding:.5rem .8rem;margin:.7rem 0;background:#fafbfa;border-radius:0 8px 8px 0}
+  .claim .t{font-weight:600;font-size:.93rem}
+  .cite{font-size:.82rem;color:var(--muted);margin-top:.35rem}
+  .cite a{color:var(--teal-d)} .quote{font-style:italic;color:#475a53;font-size:.82rem;margin:.2rem 0 0}
+  .lvl{font-size:.7rem;font-weight:700;text-transform:uppercase;color:var(--teal-d);
+       background:#e6f1ef;padding:.05rem .4rem;border-radius:5px;margin-left:.3rem}
+  .unsub{font-size:.85rem;color:var(--muted);margin:.3rem 0}
+  .models{font-size:.74rem;color:var(--muted);margin-top:1rem;border-top:1px solid var(--line);padding-top:.7rem}
+  .disc{font-size:.74rem;color:var(--muted);margin-top:1.6rem;text-align:center}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;
+        border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:.4rem}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Ayurvedic Predictive Model</h1>
+  <p class="sub">Enter a symptom or condition. Every recommendation is substantiated against live PubMed evidence — or honestly declined.</p>
+
+  <div class="search">
+    <input id="q" placeholder="e.g. constant stress and can't sleep" autocomplete="off">
+    <button id="go">Analyze</button>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="note">Each query runs live literature search + verification — expect <b>30–90 seconds</b>.</div>
+
+  <div id="out"></div>
+  <p class="disc" id="disc"></p>
+</div>
+
+<script>
+const EX = ["constant stress and can't sleep","knee arthritis pain","high blood sugar",
+            "acidity and heartburn","poor memory and focus","weak immunity"];
+const chips = document.getElementById('chips');
+EX.forEach(e=>{const c=document.createElement('span');c.className='chip';c.textContent=e;
+  c.onclick=()=>{document.getElementById('q').value=e;run();};chips.appendChild(c);});
+
+const out=document.getElementById('out'), disc=document.getElementById('disc'),
+      btn=document.getElementById('go'), q=document.getElementById('q');
+btn.onclick=run; q.addEventListener('keydown',e=>{if(e.key==='Enter')run();});
+
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+async function run(){
+  const query=q.value.trim(); if(!query)return;
+  btn.disabled=true; out.innerHTML=''; disc.textContent='';
+  out.innerHTML=`<div class="card"><span class="spin"></span>Searching PubMed and verifying evidence…</div>`;
+  try{
+    const r=await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify({query})});
+    render(await r.json());
+  }catch(e){ out.innerHTML=`<div class="card">Error: ${esc(String(e))}. Is the server running?</div>`; }
+  btn.disabled=false;
+}
+
+function render(res){
+  const m=res.models||{};
+  const indep = m.cross_provider?'cross-provider':(m.cross_model?'cross-model':'same model');
+  let h='<div class="card">';
+  const aiBadge = res.source==='ai_proposed'
+    ? '<span class="badge b-amber">AI-proposed</span>'
+    : '<span class="badge b-grey">curated formulary</span>';
+  if(res.status==='recommendation'){
+    const o=res.outcome;
+    h+=`<span class="badge b-green">Recommendation</span> ${aiBadge}
+        <span class="badge b-grey">${res.n_citations} citations</span>
+        <div class="rx">${esc(o.formula)}</div>`;
+    if(o.ai_proposed) h+=`<div class="meta" style="color:var(--amber)">Proposed by the model (not from the curated classical formulary) — every claim below was still verified against PubMed.</div>`;
+    h+=`<div class="meta">Formulation: ${esc(o.formulation)}</div>
+        <div class="meta">Delivery: ${esc(o.delivery_system)}</div>
+        <div class="meta">Ayurvedic frame: ${esc(o.ayurvedic_frame||'—')}</div>
+        <div class="meta">Overall evidence grade: <b>${esc(o.overall_evidence_grade)}</b></div>`;
+    o.substantiated_claims.forEach(c=>{
+      h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
+      c.citations.slice(0,3).forEach(ci=>{
+        h+=`<div class="cite">PMID <a href="${ci.url}" target="_blank">${ci.pmid}</a> · ${esc(ci.year)} · ${esc(ci.evidence_level)}`;
+        if(ci.support_quote) h+=`<div class="quote">“${esc(ci.support_quote)}”</div>`;
+        h+=`</div>`;
+      });
+      h+=`</div>`;
+    });
+    if(o.unsubstantiated_claims&&o.unsubstantiated_claims.length){
+      h+=`<div class="unsub"><b>Could not substantiate:</b></div>`;
+      o.unsubstantiated_claims.forEach(u=>h+=`<div class="unsub">• ${esc(u)}</div>`);
+    }
+  } else {
+    h+=`<span class="badge b-amber">Insufficient evidence</span>
+        <div class="meta" style="margin-top:.7rem">${esc(res.note||'No substantiated recommendation could be produced.')}</div>`;
+  }
+  h+=`<div class="models">Generator: ${esc(m.generator)} · Verifier: ${esc(m.verifier)} · <b>${indep}</b></div></div>`;
+  out.innerHTML=h;
+  disc.textContent=res.disclaimer||'';
+}
+</script>
+</body>
+</html>
