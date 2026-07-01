@@ -74,7 +74,7 @@ const out=document.getElementById('out'), disc=document.getElementById('disc'),
       btn=document.getElementById('go'), q=document.getElementById('q');
 btn.onclick=run; q.addEventListener('keydown',e=>{if(e.key==='Enter')run();});
 
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(s){return String(s ?? '').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
 async function run(){
   const query=q.value.trim(); if(!query)return;
