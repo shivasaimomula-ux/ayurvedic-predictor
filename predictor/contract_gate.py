@@ -1,4 +1,4 @@
-"""Inbound/outbound contract gates for Stage A (F SymptomSpec → C FormulationInput)."""
+"""Inbound/outbound contract gates for Stage A (F → A → C/B)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,12 @@ from typing import Any, Optional
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from herbenzo_contracts import FormulationInput, SymptomSpec, validation_error_body
+from herbenzo_contracts import (
+    FormulationInput,
+    FormulationSpec,
+    SymptomSpec,
+    validation_error_body,
+)
 
 
 def validate_inbound_context(context: Optional[dict[str, Any]]) -> Optional[SymptomSpec]:
@@ -37,5 +42,13 @@ def validate_outbound_formulation_input(payload: dict[str, Any]) -> FormulationI
     """Validate A→C classical FormulationInput; raise HTTPException on failure."""
     try:
         return FormulationInput.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=validation_error_body(exc)) from exc
+
+
+def validate_outbound_formulation_spec(payload: dict[str, Any]) -> FormulationSpec:
+    """Validate A→B FormulationSpec; raise HTTPException on failure."""
+    try:
+        return FormulationSpec.model_validate(payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=validation_error_body(exc)) from exc

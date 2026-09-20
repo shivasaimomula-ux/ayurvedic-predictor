@@ -69,6 +69,12 @@ FORMULATION_DOSAGE_FORM = os.getenv("FORMULATION_DOSAGE_FORM", "")  # empty → 
 _serving = os.getenv("FORMULATION_SERVING_SIZE_G")
 FORMULATION_SERVING_SIZE_G = float(_serving) if _serving else None
 
+# A → B FormulationSpec: allow CoA/demo quantity_mg table when stated dose absent.
+# Set FORMULATION_SPEC_ALLOW_DEMO_DOSES=0 to refuse unless stated dose is present.
+FORMULATION_SPEC_ALLOW_DEMO_DOSES = os.getenv(
+    "FORMULATION_SPEC_ALLOW_DEMO_DOSES", "1"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _provider(model: str) -> str:
     return "anthropic" if model.startswith("claude") else "google"

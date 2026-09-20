@@ -48,6 +48,46 @@ class ContractGateTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 422)
 
+    def test_outbound_formulation_spec_happy(self):
+        fs = contract_gate.validate_outbound_formulation_spec(
+            {
+                "formulation_id": "F-A-ASHW",
+                "product_name": "Ashwagandha",
+                "dosage_form": "capsule",
+                "target_market": "US",
+                "servings_per_day": 1,
+                "confidence": 0.7,
+                "ingredients": [
+                    {
+                        "ingredient_id": "HB-ASHW",
+                        "botanical_name": "Withania somnifera",
+                        "quantity_mg": 500.0,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(fs.ingredients[0].ingredient_id, "HB-ASHW")
+
+    def test_outbound_formulation_spec_rejects_zero_dose(self):
+        with self.assertRaises(HTTPException) as ctx:
+            contract_gate.validate_outbound_formulation_spec(
+                {
+                    "formulation_id": "F-BAD",
+                    "product_name": "X",
+                    "dosage_form": "capsule",
+                    "target_market": "US",
+                    "confidence": 0.5,
+                    "ingredients": [
+                        {
+                            "ingredient_id": "HB-ASHW",
+                            "botanical_name": "Withania somnifera",
+                            "quantity_mg": 0,
+                        }
+                    ],
+                }
+            )
+        self.assertEqual(ctx.exception.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

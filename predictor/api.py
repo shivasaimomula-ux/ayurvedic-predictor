@@ -20,7 +20,9 @@ app = FastAPI(
     description=(
         "Stage A recommender. Accepts F SymptomSpec handoff via `context` "
         "(spec_id, confidence_floor, safety) and emits C FormulationInput "
-        "(`formulation_input`, modernized_sku=null) on recommendation."
+        "(`formulation_input`, modernized_sku=null) plus B FormulationSpec "
+        "(`formulation_spec`) when HB-* identity and quantity_mg resolve; "
+        "otherwise formulation_spec is null with formulation_spec_error."
     ),
 )
 
@@ -50,6 +52,7 @@ def health():
             "max_iterations": config.MAX_ITERATIONS,
             "port_contract": 8000,
             "formulation_export": True,
+            "formulation_spec_export": True,
             "contracts": "herbenzo-contracts"}
 
 
@@ -79,6 +82,9 @@ def predict(req: PredictRequest):
             }
             result = {**result, "formulation_input": fi}
         contract_gate.validate_outbound_formulation_input(fi)
+    fs = result.get("formulation_spec") if isinstance(result, dict) else None
+    if isinstance(fs, dict):
+        contract_gate.validate_outbound_formulation_spec(fs)
     return result
 
 
