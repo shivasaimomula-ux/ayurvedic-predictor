@@ -15,6 +15,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import config
+from .enum_adapter import resolve_a_enums
 
 # "Ashwagandha (Withania somnifera)" or plain "Ashwagandha"
 _HERB_RE = re.compile(r"^\s*(.+?)\s*\(([^)]+)\)\s*$")
@@ -92,10 +93,21 @@ def to_formulation_input(
     if f_intake and f_intake.get("confidence_floor") is not None:
         note_parts.append(f"confidence_floor={f_intake['confidence_floor']}")
 
-    return {
+    enum_fields, cat_meta, mkt_meta = resolve_a_enums(
+        product_category=config.FORMULATION_PRODUCT_CATEGORY,
+        regulatory_category=config.FORMULATION_REGULATORY_CATEGORY,
+        target_market=config.FORMULATION_TARGET_MARKET,
+    )
+    if cat_meta.get("dropped"):
+        note_parts.append(
+            f"regulatory_category_unresolved={cat_meta.get('input')!r}"
+        )
+
+    payload: Dict[str, Any] = {
         "product_name": outcome.get("formula") or "Unnamed product",
-        "product_category": config.FORMULATION_PRODUCT_CATEGORY,
-        "target_market": config.FORMULATION_TARGET_MARKET,
+        "product_category": enum_fields["product_category"],
+        "regulatory_category": enum_fields["regulatory_category"],
+        "target_market": enum_fields["target_market"],
         "dosage_form": _dosage_form(outcome),
         "serving_size_g": config.FORMULATION_SERVING_SIZE_G,
         "claimed_benefits": claimed_benefits,
@@ -105,4 +117,10 @@ def to_formulation_input(
         "handoff_note": "; ".join(note_parts),
         "ayurvedic_formulation": outcome.get("formulation"),
         "ayurvedic_delivery": outcome.get("delivery_system"),
+        # Non-contract diagnostic (stripped by FormulationInput extra=forbid
+        # callers that validate strictly — keep only if gate allows extras).
     }
+    # Attach resolution only when the consumer is glue/debug (not C StrictModel).
+    # C contract_gate forbids unknown keys; omit _enum_meta from the handoff body.
+    _ = (cat_meta, mkt_meta)
+    return payload

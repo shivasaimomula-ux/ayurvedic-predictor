@@ -57,9 +57,14 @@ DISCLAIMER = (
 # --- A → C FormulationInput demo defaults (B Modernizer skipped) ------------
 # Hand/env defaults for the thin adapter; not a full registry / CoA path.
 FORMULATION_TARGET_MARKET = os.getenv("FORMULATION_TARGET_MARKET", "US")
+# Indication / MeSH string for Stage C (may differ from regulatory lens).
 FORMULATION_PRODUCT_CATEGORY = os.getenv(
     "FORMULATION_PRODUCT_CATEGORY", "dietary_supplement"
 )
+# Shared E regulatory lens (Task T8). Empty → resolve from PRODUCT_CATEGORY aliases.
+FORMULATION_REGULATORY_CATEGORY = os.getenv(
+    "FORMULATION_REGULATORY_CATEGORY", ""
+).strip() or None
 FORMULATION_DOSAGE_FORM = os.getenv("FORMULATION_DOSAGE_FORM", "")  # empty → derive
 _serving = os.getenv("FORMULATION_SERVING_SIZE_G")
 FORMULATION_SERVING_SIZE_G = float(_serving) if _serving else None

@@ -84,6 +84,7 @@ class FormulationExportTests(unittest.TestCase):
         self.assertIsNone(fi["modernized_sku"])
         self.assertEqual(fi["target_market"], "US")
         self.assertEqual(fi["product_category"], "dietary_supplement")
+        self.assertEqual(fi["regulatory_category"], "SUPPLEMENT")
         self.assertEqual(fi["dosage_form"], "powder")
         self.assertEqual(len(fi["ingredients"]), 2)
         self.assertEqual(fi["ingredients"][0]["latin_name"], "Emblica officinalis")
