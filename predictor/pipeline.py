@@ -16,10 +16,12 @@ Handoffs (functional pipeline hardening):
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from . import config, agents, knowledge_graph, f_context, formulation_export
 from .connectors import pubchem
+
+ProgressCb = Callable[[str, int, str, Optional[Dict[str, Any]]], None]
 
 
 def _now() -> str:
@@ -34,7 +36,27 @@ def _grade_label(evidence: List[Dict]) -> str:
     return best.get("evidence_level", "unknown")
 
 
-def predict(user_input: str, context: Dict | None = None) -> Dict:
+def _progress(
+    cb: ProgressCb | None,
+    stage: str,
+    percent: int,
+    message: str,
+    detail: Optional[Dict[str, Any]] = None,
+) -> None:
+    if cb is None:
+        return
+    try:
+        cb(stage, percent, message, detail)
+    except Exception:  # noqa: BLE001 — progress must never break predict
+        pass
+
+
+def predict(
+    user_input: str,
+    context: Dict | None = None,
+    *,
+    on_progress: ProgressCb | None = None,
+) -> Dict:
     intake = f_context.consume_f_context(context)
     audit: List[Dict] = []
 
@@ -42,6 +64,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
         audit.append({"ts": _now(), "stage": stage, **data})
 
     log("f_context", **f_context.audit_event(intake))
+    _progress(on_progress, "interpret", 5, "Interpreting symptom…")
 
     # --- Stage 1 ------------------------------------------------------------
     interp = agents.interpret(user_input)
@@ -49,6 +72,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
     log("interpret", result=interp)
 
     # --- Stage 2 ------------------------------------------------------------
+    _progress(on_progress, "candidates", 15, "Generating candidates…")
     cand = knowledge_graph.generate_candidates(user_input)
     source = "curated"
 
@@ -67,6 +91,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
         source=source, n_candidates=len(cand["candidates"]))
 
     if not cand["candidates"]:
+        _progress(on_progress, "done", 100, "No candidates")
         return _envelope(user_input, interp, "insufficient_evidence", None, [],
                          audit, source=source, f_intake=intake,
                          note="Could not generate any candidate formulation for this input.")
@@ -75,8 +100,17 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
     candidate = cand["candidates"][0]
 
     # --- Stage 3: evidence loop per claim -----------------------------------
+    claims = list(candidate.get("claims") or [])
     claim_results = []
-    for claim in candidate["claims"]:
+    for idx, claim in enumerate(claims):
+        pct = 20 + int(55 * ((idx + 1) / max(1, len(claims))))
+        _progress(
+            on_progress,
+            "evidence",
+            pct,
+            f"Verifying claim {idx + 1}/{len(claims)}…",
+            {"claim_index": idx, "claim_total": len(claims), "claim": claim},
+        )
         res = agents.evidence_loop(claim, condition)
         claim_results.append(res)
         log("evidence_loop", claim=claim, status=res["status"],
@@ -87,6 +121,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
     all_evidence = [e for c in claim_results for e in c["evidence"]]
 
     # --- Stage 4: justification + safety (chemistry grounding) --------------
+    _progress(on_progress, "chemistry", 80, "Grounding chemistry (PubChem)…")
     chemistry = []
     for name in candidate.get("phytochemicals", []):
         info = pubchem.compound(name)
@@ -96,7 +131,9 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
 
     # --- Stage 5: synthesis -------------------------------------------------
     # A recommendation requires at least one fully-substantiated claim.
+    _progress(on_progress, "synthesize", 90, "Synthesizing recommendation…")
     if not supported:
+        _progress(on_progress, "done", 100, "Insufficient evidence")
         return _envelope(user_input, interp, "insufficient_evidence", candidate,
                          all_evidence, audit, source=source, f_intake=intake,
                          note="No candidate claim could be substantiated with graded PubMed evidence.")
@@ -137,6 +174,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
         product_name=formulation_input.get("product_name"),
         n_ingredients=len(formulation_input.get("ingredients") or []),
         modernized_sku=formulation_input.get("modernized_sku"))
+    _progress(on_progress, "done", 100, "Complete")
     return _envelope(user_input, interp, "recommendation", candidate, all_evidence,
                      audit, outcome=outcome, source=source, f_intake=intake,
                      formulation_input=formulation_input)

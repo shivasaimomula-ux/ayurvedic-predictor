@@ -18,9 +18,30 @@ pip install -r requirements.txt        # first time only
 Then open **http://127.0.0.1:8000** in your browser — type a symptom, hit Analyze.
 
 ## Three ways to use it
-- **Web UI:** http://127.0.0.1:8000
-- **API docs:** http://127.0.0.1:8000/docs  (interactive `POST /predict`)
+- **Web UI:** http://127.0.0.1:8000 (polls `POST /jobs/predict` progress)
+- **API docs:** http://127.0.0.1:8000/docs
 - **CLI:** `python3 -m predictor.cli "constant stress and can't sleep"`
+
+### Async jobs (Task T18 / Finding #20)
+Long runs should use the job API so A’s UI (and F/glue) can poll without holding
+one HTTP request for minutes:
+
+```bash
+# submit
+curl -s -X POST http://127.0.0.1:8000/jobs/predict \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: optional-retry-key' \
+  -d '{"query":"constant stress and can'\''t sleep"}'
+# → 202 {"job_id":"…","status":"queued","poll_url":"/jobs/…","progress":{…}}
+
+# poll
+curl -s http://127.0.0.1:8000/jobs/<job_id>
+# → progress.stage / progress.percent / result when succeeded
+```
+
+`POST /predict` remains **synchronous** for backward compatibility (existing
+glue / F handoff). Prefer jobs for new callers. Budgets:
+`PREDICT_JOB_TIMEOUT_S` (default 540), `PREDICT_MAX_CONCURRENT_JOBS` (default 2).
 
 A query takes ~30–90 s (live literature search + per-claim verification).
 

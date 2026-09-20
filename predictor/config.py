@@ -53,6 +53,12 @@ ARTICLES_PER_QUERY = int(os.getenv("ARTICLES_PER_QUERY", "5"))
 MIN_SUPPORTING_ARTICLES = int(os.getenv("MIN_SUPPORTING_ARTICLES", "1"))
 MIN_EVIDENCE_LEVEL = int(os.getenv("MIN_EVIDENCE_LEVEL", "2"))  # see EVIDENCE_RANK
 
+# --- Async predict jobs (Task T18 / Finding #20) ------------------------------
+# Wall-clock budget for a single job (default 9 min; under F's 600s handoff).
+PREDICT_JOB_TIMEOUT_S = float(os.getenv("PREDICT_JOB_TIMEOUT_S", "540"))
+PREDICT_MAX_CONCURRENT_JOBS = int(os.getenv("PREDICT_MAX_CONCURRENT_JOBS", "2"))
+PREDICT_JOB_RETENTION_S = float(os.getenv("PREDICT_JOB_RETENTION_S", "3600"))
+
 # Higher = stronger evidence. Used to grade and to decide sufficiency.
 EVIDENCE_RANK = {
     "rct": 5,
