@@ -54,6 +54,16 @@ DISCLAIMER = (
     "Not a diagnosis, prescription, or substitute for a licensed practitioner."
 )
 
+# --- A → C FormulationInput demo defaults (B Modernizer skipped) ------------
+# Hand/env defaults for the thin adapter; not a full registry / CoA path.
+FORMULATION_TARGET_MARKET = os.getenv("FORMULATION_TARGET_MARKET", "US")
+FORMULATION_PRODUCT_CATEGORY = os.getenv(
+    "FORMULATION_PRODUCT_CATEGORY", "dietary_supplement"
+)
+FORMULATION_DOSAGE_FORM = os.getenv("FORMULATION_DOSAGE_FORM", "")  # empty → derive
+_serving = os.getenv("FORMULATION_SERVING_SIZE_G")
+FORMULATION_SERVING_SIZE_G = float(_serving) if _serving else None
+
 
 def _provider(model: str) -> str:
     return "anthropic" if model.startswith("claude") else "google"

@@ -24,11 +24,20 @@ Then open **http://127.0.0.1:8000** in your browser — type a symptom, hit Anal
 
 A query takes ~30–90 s (live literature search + per-claim verification).
 
+## Pipeline handoffs (F → A → C)
+- **Port:** `8000` (F posts to `POST /predict`; do not clash with APEX).
+- **Consumes F `context`:** `spec_id`, `confidence_floor`, `safety`, `symptom_spec`
+  — echoed in `f_context` + audit; floor is **never raised**.
+- **Emits for C:** on `status=recommendation`, `formulation_input` matches
+  dossier_engine `FormulationInput` shape with **`modernized_sku: null`**
+  (B Modernizer skipped). Refusals omit the export.
+
 ## Configuration (.env)
-- `GEMINI_API_KEY` — required (already present).
-- `ANTHROPIC_API_KEY` — optional; if set, the verifier auto-switches to Claude
-  for true **cross-provider** verification. No code change needed.
-- Other knobs (models, iterations, thresholds): see `predictor/config.py`.
+Copy `.env.example` → `.env` (never commit secrets).
+- `GEMINI_API_KEY` — generator (default).
+- `ANTHROPIC_API_KEY` — optional; verifier prefers Claude when set
+  (trust-critical verify only).
+- Other knobs (models, iterations, A→C demo defaults): see `predictor/config.py`.
 
 ## Layout
 ```
