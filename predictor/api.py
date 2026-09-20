@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, pipeline
+from . import config, contract_gate, pipeline
 
 app = FastAPI(
     title="Ayurvedic Predictive Model",
@@ -49,12 +49,37 @@ def health():
             "cross_provider": config.is_cross_provider(),
             "max_iterations": config.MAX_ITERATIONS,
             "port_contract": 8000,
-            "formulation_export": True}
+            "formulation_export": True,
+            "contracts": "herbenzo-contracts"}
 
 
 @app.post("/predict")
 def predict(req: PredictRequest):
-    return pipeline.predict(req.query, req.context)
+    # Audit Finding #1 — validate F SymptomSpec at the HTTP boundary when present.
+    contract_gate.validate_inbound_context(req.context)
+    result = pipeline.predict(req.query, req.context)
+    fi = result.get("formulation_input") if isinstance(result, dict) else None
+    if isinstance(fi, dict):
+        # Propagate F floor into FormulationInput for C; never raise.
+        intake_floor = None
+        if isinstance(req.context, dict):
+            intake_floor = req.context.get("confidence_floor")
+            nested = req.context.get("symptom_spec")
+            if intake_floor is None and isinstance(nested, dict):
+                intake_floor = nested.get("confidence_floor")
+        if intake_floor is not None and fi.get("inherited_confidence") is None:
+            fi = {
+                **fi,
+                "inherited_confidence": float(intake_floor),
+                "confidence_floor": float(
+                    fi.get("confidence_floor")
+                    if fi.get("confidence_floor") is not None
+                    else intake_floor
+                ),
+            }
+            result = {**result, "formulation_input": fi}
+        contract_gate.validate_outbound_formulation_input(fi)
+    return result
 
 
 # Serve the web UI at "/". Mounted LAST so /health and /predict take priority.

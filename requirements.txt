@@ -6,3 +6,7 @@ uvicorn>=0.27
 google-genai>=1.0
 # optional — only needed for a Claude verifier
 anthropic>=0.40
+# Shared handoff contracts (Python ≥3.11). Install separately if needed:
+#   pip install "/Users/shivasaimomula/Desktop/herbenzo-contracts"
+#   pip install "git+https://github.com/shivasaimomula-ux/herbenzo-contracts.git"
+herbenzo-contracts @ file:///Users/shivasaimomula/Desktop/herbenzo-contracts
