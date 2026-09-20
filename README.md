@@ -47,9 +47,17 @@ Copy `.env.example` → `.env` (never commit secrets).
 | `NVIDIA_API_KEY` | Optional NIM cheap verifier (preferred when set) |
 | `ANTHROPIC_API_KEY` | Optional Claude escalate only |
 | `ADJUDICATION_URL` | Blue service (default `http://127.0.0.1:8011`) |
+| `HERBENZO_PUBMED_CACHE_DIR` | Shared PMID disk cache with B / adjudication (Task T16) |
+| `HERBENZO_PUBMED_CACHE_TTL_S` | Cache freshness window (default 30 days) |
 
 Other knobs (models, iterations, A→C/B demo defaults): see `predictor/config.py`.
 
+## Shared PubMed cache (Task T16)
+
+A’s PubMed connector is **read-through** against `herbenzo-pubmed-cache`
+(same on-disk layout as Stage B; Desktop path
+`~/Desktop/herbenzo-pubmed-cache`). Set the env vars above to the **same absolute
+directory** used by B and adjudication to avoid duplicate NCBI EFetch spend.
 ## Layout
 ```
 ayurvedic-predictor/

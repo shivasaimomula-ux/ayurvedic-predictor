@@ -6,3 +6,5 @@ uvicorn>=0.27
 google-genai>=1.0
 # optional — Claude escalate only (disagreement / hard-reject); never default volume path
 anthropic>=0.40
+# Shared PubMed/PMID disk cache with Stage B (Task T16)
+herbenzo-pubmed-cache @ file:///Users/shivasaimomula/Desktop/herbenzo-pubmed-cache

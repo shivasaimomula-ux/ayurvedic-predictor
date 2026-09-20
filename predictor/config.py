@@ -72,6 +72,10 @@ EVIDENCE_RANK = {
 NCBI_EMAIL = os.getenv("NCBI_EMAIL", "research@herbenzo.example")
 NCBI_API_KEY = os.getenv("NCBI_API_KEY")  # optional; raises rate limit to 10 rps
 NCBI_TOOL = "ayurvedic-predictive-model"
+# Shared with Stage B / adjudication (Task T16). Absolute path recommended.
+PUBMED_CACHE_DIR = os.getenv("HERBENZO_PUBMED_CACHE_DIR") or None
+_ttl_raw = os.getenv("HERBENZO_PUBMED_CACHE_TTL_S")
+PUBMED_CACHE_TTL_S = int(_ttl_raw) if _ttl_raw not in (None, "") else None
 
 # --- Safety ------------------------------------------------------------------
 DISCLAIMER = (
