@@ -10,9 +10,9 @@ judge ONLY from that text, never from prior knowledge.
 from __future__ import annotations
 
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
-from . import config, llm
+from . import claim_verifier, config, llm
 from .connectors import pubmed
 
 # A binomial like "Withania somnifera" / "Piper longum".
@@ -135,34 +135,9 @@ def escalated_query(claim: str, condition: str, iteration: int) -> str:
     return ladder[min(iteration, len(ladder) - 1)]
 
 
-# --- Stage 3b: verification agent -------------------------------------------
-
-_VERIFY_SYS = (
-    "You are a strict evidence verifier. You are given a CLAIM and the title + "
-    "abstract of ONE real article. Decide ONLY from the supplied text whether "
-    "the article supports the claim. Never use outside knowledge. Return JSON: "
-    '{"supported": true/false, "support_quote": "<verbatim sentence from the '
-    'abstract, or empty>", "evidence_level": one of '
-    '["rct","clinical_trial","meta_analysis","cohort","case_report","review",'
-    '"animal","in_vitro","in_silico","unknown"], "reason": "<one sentence>"}. '
-    "If the abstract is empty or irrelevant, supported=false."
-)
-
-
-def _run_verifier(prompt: str) -> Tuple[Dict, str, bool]:
-    """Run the verifier model; fall back to the generator model if it errors.
-
-    Returns (verdict, model_used, fell_back). Falling back to the generator
-    model is logged so a (rare) loss of cross-model independence is visible in
-    the audit trail rather than hidden.
-    """
-    try:
-        return llm.complete_json(prompt, config.VERIFIER_MODEL, system=_VERIFY_SYS), config.VERIFIER_MODEL, False
-    except Exception:  # noqa: BLE001
-        if config.VERIFIER_MODEL != config.GENERATOR_MODEL:
-            v = llm.complete_json(prompt, config.GENERATOR_MODEL, system=_VERIFY_SYS)
-            return v, config.GENERATOR_MODEL, True
-        raise
+# --- Stage 3b: verification agent (cost-ordered cascade) --------------------
+# Prefer blue adjudication (:8011) → local NIM → Gemini; Claude escalate only.
+# See claim_verifier.py (Task T15 / Audit Finding #11).
 
 
 def verify_claim_against_article(claim: str, article: Dict) -> Dict:
@@ -170,28 +145,48 @@ def verify_claim_against_article(claim: str, article: Dict) -> Dict:
     if not article.get("abstract"):
         return {"supported": False, "support_quote": "", "reason": "no abstract",
                 "evidence_level": "unknown", "pmid": article["pmid"],
-                "verified_by": None, "verifier_fallback": False}
-    prompt = (
-        f"CLAIM: {claim}\n\n"
-        f"ARTICLE TITLE: {article['title']}\n"
-        f"ABSTRACT: {article['abstract']}\n"
-    )
+                "verified_by": None, "verifier_fallback": False,
+                "verifier_path": None, "escalated": False}
     try:
-        v, model_used, fell_back = _run_verifier(prompt)
+        v = claim_verifier.verify_claim_cascade(
+            claim, article, product=_subject_term(claim)
+        )
     except Exception as e:  # noqa: BLE001
-        return {"supported": False, "support_quote": "", "reason": f"verifier error: {e}",
-                "evidence_level": "unknown", "pmid": article["pmid"],
-                "verified_by": None, "verifier_fallback": False}
-    v["verified_by"] = model_used
-    v["verifier_fallback"] = fell_back
+        # Last-chance: generator model only (never silent Claude default).
+        try:
+            raw = llm.complete_json(
+                (
+                    f"CLAIM: {claim}\n\n"
+                    f"ARTICLE TITLE: {article['title']}\n"
+                    f"ABSTRACT: {article['abstract']}\n"
+                ),
+                config.GENERATOR_MODEL,
+                system=claim_verifier._VERIFY_SYS,
+            )
+            v = {
+                "supported": bool(raw.get("supported")),
+                "support_quote": raw.get("support_quote") or "",
+                "evidence_level": raw.get("evidence_level") or "unknown",
+                "reason": raw.get("reason") or "",
+                "verified_by": config.GENERATOR_MODEL,
+                "verifier_fallback": True,
+                "verifier_path": "generator_fallback",
+                "escalated": False,
+            }
+        except Exception:  # noqa: BLE001
+            return {"supported": False, "support_quote": "",
+                    "reason": f"verifier error: {e}",
+                    "evidence_level": "unknown", "pmid": article["pmid"],
+                    "verified_by": None, "verifier_fallback": False,
+                    "verifier_path": None, "escalated": False}
     # Prefer the PubMed-derived publication-type grade if it is stronger /known.
     pub_level = article.get("evidence_level", "unknown")
     model_level = v.get("evidence_level", "unknown")
     if config.EVIDENCE_RANK.get(pub_level, 0) >= config.EVIDENCE_RANK.get(model_level, 0):
         v["evidence_level"] = pub_level
     v["pmid"] = article["pmid"]
-    v["url"] = article["url"]
-    v["title"] = article["title"]
+    v["url"] = article.get("url", "")
+    v["title"] = article.get("title", "")
     v["year"] = article.get("year", "")
     return v
 

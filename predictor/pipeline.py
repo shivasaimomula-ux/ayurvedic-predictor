@@ -170,6 +170,8 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
         "models": {
             "generator": config.GENERATOR_MODEL,
             "verifier": config.VERIFIER_MODEL,
+            "escalate": config.ESCALATE_MODEL,
+            "cost_order": list(config.VERIFIER_COST_ORDER),
             "cross_model": config.is_cross_model(),
             "cross_provider": config.is_cross_provider(),
         },

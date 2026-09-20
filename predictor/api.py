@@ -42,9 +42,26 @@ class PredictRequest(BaseModel):
 
 @app.get("/health")
 def health():
+    from . import claim_verifier
+
+    verifier = claim_verifier.describe_verifier_config()
+    adjudication_reachable = False
+    if config.ADJUDICATION_PREFERRED:
+        try:
+            from .adjudication_client import AdjudicationClient
+            adjudication_reachable = AdjudicationClient().is_reachable()
+        except Exception:  # noqa: BLE001
+            adjudication_reachable = False
     return {"status": "ok", "llm_available": config.llm_available(),
             "generator": config.GENERATOR_MODEL, "verifier": config.VERIFIER_MODEL,
+            "escalate_model": config.ESCALATE_MODEL,
             "verifier_usable": config.verifier_usable(),
+            "cost_order": verifier["cost_order"],
+            "cheap_available": verifier["cheap_available"],
+            "default_verifier_is_claude": verifier["default_verifier_is_claude"],
+            "adjudication_url": config.ADJUDICATION_URL,
+            "adjudication_preferred": config.ADJUDICATION_PREFERRED,
+            "adjudication_reachable": adjudication_reachable,
             "cross_model": config.is_cross_model(),
             "cross_provider": config.is_cross_provider(),
             "max_iterations": config.MAX_ITERATIONS,

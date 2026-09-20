@@ -34,10 +34,21 @@ A query takes ~30–90 s (live literature search + per-claim verification).
 
 ## Configuration (.env)
 Copy `.env.example` → `.env` (never commit secrets).
-- `GEMINI_API_KEY` — generator (default).
-- `ANTHROPIC_API_KEY` — optional; verifier prefers Claude when set
-  (trust-critical verify only).
-- Other knobs (models, iterations, A→C demo defaults): see `predictor/config.py`.
+
+**Verifier cost order (Task T15 / Finding #11):** `NVIDIA (NIM) > Gemini > Claude`
+
+1. Prefer blue adjudication on `:8011` when `ADJUDICATION_PREFERRED=1` and reachable.
+2. Else local cheap path: NIM (if `NVIDIA_API_KEY`) → Gemini (`VERIFIER_MODEL`, default `gemini-2.5-pro`).
+3. Claude (`ESCALATE_MODEL`) **only** on cheap-provider disagreement or forced hard-reject — never the default volume verifier.
+
+| Var | Role |
+|-----|------|
+| `GEMINI_API_KEY` | Generator + cheap Gemini verifier |
+| `NVIDIA_API_KEY` | Optional NIM cheap verifier (preferred when set) |
+| `ANTHROPIC_API_KEY` | Optional Claude escalate only |
+| `ADJUDICATION_URL` | Blue service (default `http://127.0.0.1:8011`) |
+
+Other knobs (models, iterations, A→C/B demo defaults): see `predictor/config.py`.
 
 ## Layout
 ```
