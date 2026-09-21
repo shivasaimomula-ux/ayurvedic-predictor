@@ -8,3 +8,7 @@ google-genai>=1.0
 anthropic>=0.40
 # Shared PubMed/PMID disk cache with Stage B (Task T16)
 herbenzo-pubmed-cache @ file:///Users/shivasaimomula/Desktop/herbenzo_pipeline/packages/herbenzo-pubmed-cache
+# Shared handoff contracts (Python ≥3.11). Install separately if needed:
+#   pip install "/Users/shivasaimomula/Desktop/herbenzo-contracts"
+#   pip install "git+https://github.com/shivasaimomula-ux/herbenzo-contracts.git"
+herbenzo-contracts @ file:///Users/shivasaimomula/Desktop/herbenzo-contracts
