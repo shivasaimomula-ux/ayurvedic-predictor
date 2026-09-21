@@ -1,0 +1,11 @@
+name: Finder duplicates
+on:
+  push:
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject '* 2.*' tracked paths
+        run: bash scripts/check_no_finder_duplicates.sh
