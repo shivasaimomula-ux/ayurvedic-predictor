@@ -1,13 +1,17 @@
-# Secrets & env
+# Secrets & env (Task T24 / Audit #23)
 .env
 .env.*
+.env.txt
 !.env.example
+*.pem
+*.key
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
+.venv312/
 venv/
 env/
 
@@ -19,3 +23,4 @@ node_modules/
 .idea/
 .vscode/
 *.log
+.pytest_cache/
