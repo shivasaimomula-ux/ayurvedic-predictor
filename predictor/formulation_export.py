@@ -15,9 +15,34 @@ import re
 from typing import Any, Dict, List, Optional
 
 from . import config
+from .enum_adapter import resolve_a_enums
 
 # "Ashwagandha (Withania somnifera)" or plain "Ashwagandha"
-_HERB_RE = re.compile(r"^\s*(.+?)\s*\(([^)]+)\)\s*$")
+# Optional trailing dose text after the closing paren is allowed.
+_HERB_RE = re.compile(r"^\s*(.+?)\s*\(([^)]+)\)\s*(.*)$")
+_DOSE_MG_RE = re.compile(
+    r"(?P<qty>\d+(?:\.\d+)?)\s*(?:mg|milligrams?)\b",
+    re.IGNORECASE,
+)
+_DOSE_G_RE = re.compile(
+    r"(?P<qty>\d+(?:\.\d+)?)\s*g(?:rams?)?\b",
+    re.IGNORECASE,
+)
+
+
+def parse_stated_dose_mg(text: Optional[str]) -> Optional[float]:
+    """Extract a positive milligram dose from free text when present."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    m = _DOSE_MG_RE.search(text)
+    if m:
+        qty = float(m.group("qty"))
+        return qty if qty > 0 else None
+    m = _DOSE_G_RE.search(text)
+    if m:
+        qty = float(m.group("qty")) * 1000.0
+        return qty if qty > 0 else None
+    return None
 
 
 def parse_herb(herb: str) -> Dict[str, Optional[str]]:
@@ -29,18 +54,30 @@ def parse_herb(herb: str) -> Dict[str, Optional[str]]:
             "stated_dose": None,
             "stated_standardization": None,
         }
-    m = _HERB_RE.match(herb.strip())
+    raw = herb.strip()
+    m = _HERB_RE.match(raw)
     if m:
+        name = m.group(1).strip()
+        latin = m.group(2).strip()
+        rest = (m.group(3) or "").strip()
+        stated = parse_stated_dose_mg(rest) or parse_stated_dose_mg(raw)
         return {
-            "name": m.group(1).strip(),
-            "latin_name": m.group(2).strip(),
-            "stated_dose": None,
+            "name": name,
+            "latin_name": latin,
+            "stated_dose": f"{stated} mg" if stated is not None else None,
             "stated_standardization": None,
         }
+    stated = parse_stated_dose_mg(raw)
+    # Strip trailing dose from plain names: "Ashwagandha 500 mg"
+    name = raw
+    if stated is not None:
+        name = _DOSE_MG_RE.sub("", name)
+        name = _DOSE_G_RE.sub("", name)
+        name = re.sub(r"\s+", " ", name).strip(" -,\t")
     return {
-        "name": herb.strip(),
+        "name": name or raw,
         "latin_name": None,
-        "stated_dose": None,
+        "stated_dose": f"{stated} mg" if stated is not None else None,
         "stated_standardization": None,
     }
 
@@ -119,12 +156,23 @@ def to_formulation_input(
     if f_intake and f_intake.get("confidence_floor") is not None:
         note_parts.append(f"confidence_floor={f_intake['confidence_floor']}")
 
+    enum_fields, cat_meta, mkt_meta = resolve_a_enums(
+        product_category=config.FORMULATION_PRODUCT_CATEGORY,
+        regulatory_category=config.FORMULATION_REGULATORY_CATEGORY,
+        target_market=config.FORMULATION_TARGET_MARKET,
+    )
+    if cat_meta.get("dropped"):
+        note_parts.append(
+            f"regulatory_category_unresolved={cat_meta.get('input')!r}"
+        )
+
     thread = build_provenance_thread(f_intake)
 
-    return {
+    payload: Dict[str, Any] = {
         "product_name": outcome.get("formula") or "Unnamed product",
-        "product_category": config.FORMULATION_PRODUCT_CATEGORY,
-        "target_market": config.FORMULATION_TARGET_MARKET,
+        "product_category": enum_fields["product_category"],
+        "regulatory_category": enum_fields["regulatory_category"],
+        "target_market": enum_fields["target_market"],
         "dosage_form": _dosage_form(outcome),
         "serving_size_g": config.FORMULATION_SERVING_SIZE_G,
         "claimed_benefits": claimed_benefits,
@@ -135,4 +183,10 @@ def to_formulation_input(
         "ayurvedic_formulation": outcome.get("formulation"),
         "ayurvedic_delivery": outcome.get("delivery_system"),
         "provenance_thread": thread,
+        # Non-contract diagnostic (stripped by FormulationInput extra=forbid
+        # callers that validate strictly — keep only if gate allows extras).
     }
+    # Attach resolution only when the consumer is glue/debug (not C StrictModel).
+    # C contract_gate forbids unknown keys; omit _enum_meta from the handoff body.
+    _ = (cat_meta, mkt_meta)
+    return payload

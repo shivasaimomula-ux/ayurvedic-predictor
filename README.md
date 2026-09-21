@@ -45,13 +45,18 @@ glue / F handoff). Prefer jobs for new callers. Budgets:
 
 A query takes ~30–90 s (live literature search + per-claim verification).
 
-## Pipeline handoffs (F → A → C)
+## Pipeline handoffs (F → A → C / B)
 - **Port:** `8000` (F posts to `POST /predict`; do not clash with APEX).
 - **Consumes F `context`:** `spec_id`, `confidence_floor`, `safety`, `symptom_spec`
   — echoed in `f_context` + audit; floor is **never raised**.
 - **Emits for C:** on `status=recommendation`, `formulation_input` matches
-  dossier_engine `FormulationInput` shape with **`modernized_sku: null`**
-  (B Modernizer skipped). Refusals omit the export.
+  dossier_engine `FormulationInput` shape with **`modernized_sku: null`**.
+- **Emits for B:** `formulation_spec` (herbenzo-contracts `FormulationSpec`) when
+  every herb resolves to an HB-* id and a positive `quantity_mg` (stated dose or
+  CoA/demo defaults). Otherwise `formulation_spec` is null with
+  `formulation_spec_error` — A does **not** invent identity or dose.
+  Independent A and B UIs stay separate; this is the typed API payload only.
+- Refusals (`insufficient_evidence`) omit both exports.
 
 ## Configuration (.env)
 Copy `.env.example` → `.env` (never commit secrets).

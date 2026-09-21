@@ -12,13 +12,22 @@ Handoffs (functional pipeline hardening):
   - F context (spec_id, confidence_floor, safety) is consumed and echoed;
     confidence_floor is never raised.
   - On recommendation, emit C-shaped `formulation_input` with modernized_sku=null.
+  - Also emit B-shaped `formulation_spec` when HB-* identity + quantity_mg
+    resolve; otherwise formulation_spec=null with a clear error (do not invent).
 """
 from __future__ import annotations
 
 import datetime as _dt
 from typing import Any, Callable, Dict, List, Optional
 
-from . import config, agents, knowledge_graph, f_context, formulation_export
+from . import (
+    config,
+    agents,
+    knowledge_graph,
+    f_context,
+    formulation_export,
+    formulation_spec_export,
+)
 from .connectors import pubchem
 
 ProgressCb = Callable[[str, int, str, Optional[Dict[str, Any]]], None]
@@ -170,23 +179,37 @@ def predict(
     formulation_input = formulation_export.to_formulation_input(
         outcome, f_intake=intake
     )
+    formulation_spec, formulation_spec_error = (
+        formulation_spec_export.try_formulation_spec(outcome, f_intake=intake)
+    )
     log("formulation_export",
         product_name=formulation_input.get("product_name"),
         n_ingredients=len(formulation_input.get("ingredients") or []),
-        modernized_sku=formulation_input.get("modernized_sku"))
+        modernized_sku=formulation_input.get("modernized_sku"),
+        formulation_spec=bool(formulation_spec),
+        formulation_spec_error=(
+            (formulation_spec_error or {}).get("message")
+            if formulation_spec_error
+            else None
+        ))
     _progress(on_progress, "done", 100, "Complete")
     return _envelope(user_input, interp, "recommendation", candidate, all_evidence,
                      audit, outcome=outcome, source=source, f_intake=intake,
-                     formulation_input=formulation_input)
+                     formulation_input=formulation_input,
+                     formulation_spec=formulation_spec,
+                     formulation_spec_error=formulation_spec_error)
 
 
 def _envelope(user_input, interp, status, candidate, evidence, audit,
               outcome=None, note=None, source="curated",
-              f_intake=None, formulation_input=None) -> Dict:
+              f_intake=None, formulation_input=None,
+              formulation_spec=None, formulation_spec_error=None) -> Dict:
     f_intake = f_intake or {}
-    # Refuse → never invent a FormulationInput for C.
+    # Refuse → never invent a FormulationInput for C or FormulationSpec for B.
     if status != "recommendation":
         formulation_input = None
+        formulation_spec = None
+        formulation_spec_error = None
     thread = None
     if formulation_input and isinstance(formulation_input.get("provenance_thread"), dict):
         thread = formulation_input["provenance_thread"]
@@ -201,6 +224,8 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
         "source": source,                 # "curated" | "ai_proposed"
         "outcome": outcome,
         "formulation_input": formulation_input,  # C handoff; null on refusal / B skip null SKU
+        "formulation_spec": formulation_spec,  # B handoff; null when identity/dose incomplete
+        "formulation_spec_error": formulation_spec_error,
         "f_context": {
             "spec_id": f_intake.get("spec_id"),
             "spec_version": f_intake.get("spec_version"),

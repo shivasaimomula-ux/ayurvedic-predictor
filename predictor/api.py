@@ -17,7 +17,7 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, pipeline
+from . import config, contract_gate, jobs, pipeline
 
 app = FastAPI(
     title="Ayurvedic Predictive Model",
@@ -25,7 +25,9 @@ app = FastAPI(
     description=(
         "Stage A recommender. Accepts F SymptomSpec handoff via `context` "
         "(spec_id, confidence_floor, safety) and emits C FormulationInput "
-        "(`formulation_input`, modernized_sku=null) on recommendation. "
+        "(`formulation_input`, modernized_sku=null) plus B FormulationSpec "
+        "(`formulation_spec`) when HB-* identity and quantity_mg resolve; "
+        "otherwise formulation_spec is null with formulation_spec_error. "
         "Prefer POST /jobs/predict + poll for long runs; POST /predict remains "
         "for sync callers."
     ),
@@ -51,6 +53,40 @@ class PredictRequest(BaseModel):
         ge=5,
         le=3600,
     )
+
+
+def _finalize_predict_result(
+    result: Any,
+    context: Optional[Dict[str, Any]],
+) -> Any:
+    """Apply T6/T11 contract gates and F floor propagation on predict envelopes."""
+    # Audit Finding #1 — validate F SymptomSpec at the HTTP boundary when present.
+    contract_gate.validate_inbound_context(context)
+    fi = result.get("formulation_input") if isinstance(result, dict) else None
+    if isinstance(fi, dict):
+        # Propagate F floor into FormulationInput for C; never raise.
+        intake_floor = None
+        if isinstance(context, dict):
+            intake_floor = context.get("confidence_floor")
+            nested = context.get("symptom_spec")
+            if intake_floor is None and isinstance(nested, dict):
+                intake_floor = nested.get("confidence_floor")
+        if intake_floor is not None and fi.get("inherited_confidence") is None:
+            fi = {
+                **fi,
+                "inherited_confidence": float(intake_floor),
+                "confidence_floor": float(
+                    fi.get("confidence_floor")
+                    if fi.get("confidence_floor") is not None
+                    else intake_floor
+                ),
+            }
+            result = {**result, "formulation_input": fi}
+        contract_gate.validate_outbound_formulation_input(fi)
+    fs = result.get("formulation_spec") if isinstance(result, dict) else None
+    if isinstance(fs, dict):
+        contract_gate.validate_outbound_formulation_spec(fs)
+    return result
 
 
 @app.get("/health")
@@ -80,6 +116,8 @@ def health():
             "max_iterations": config.MAX_ITERATIONS,
             "port_contract": 8000,
             "formulation_export": True,
+            "formulation_spec_export": True,
+            "contracts": "herbenzo-contracts",
             "async_jobs": True,
             "predict_job_timeout_s": config.PREDICT_JOB_TIMEOUT_S,
             "predict_max_concurrent_jobs": config.PREDICT_MAX_CONCURRENT_JOBS}
@@ -88,7 +126,8 @@ def health():
 @app.post("/predict")
 def predict(req: PredictRequest):
     """Synchronous predict (backward compatible). Prefer /jobs/predict for UIs."""
-    return pipeline.predict(req.query, req.context)
+    result = pipeline.predict(req.query, req.context)
+    return _finalize_predict_result(result, req.context)
 
 
 @app.post("/jobs/predict", status_code=202)
@@ -98,6 +137,8 @@ def submit_predict_job(
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Submit async predict; poll GET /jobs/{job_id} for progress/result."""
+    # Validate inbound SymptomSpec at submit time (same gate as sync /predict).
+    contract_gate.validate_inbound_context(req.context)
     rec = jobs.STORE.submit_predict(
         query=req.query,
         context=req.context,
@@ -137,7 +178,8 @@ def get_job_result(job_id: str):
             },
         )
     if rec.status == "succeeded":
-        return rec.result
+        # Apply outbound contract gates to async results (parity with /predict).
+        return _finalize_predict_result(rec.result, None)
     raise HTTPException(
         status_code=422,
         detail={"message": rec.error or "Job failed", "status": rec.status},
