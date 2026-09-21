@@ -37,6 +37,11 @@ def consume_f_context(raw: Optional[Dict]) -> Dict[str, Any]:
     spec_version = ctx.get("spec_version") or (symptom_spec or {}).get("spec_version")
     jurisdiction = ctx.get("jurisdiction") or (symptom_spec or {}).get("jurisdiction")
     source = ctx.get("source")
+    provenance_thread = (
+        ctx.get("provenance_thread")
+        if isinstance(ctx.get("provenance_thread"), dict)
+        else None
+    )
 
     floor = _as_float(ctx.get("confidence_floor"))
     if floor is None and symptom_spec is not None:
@@ -60,6 +65,7 @@ def consume_f_context(raw: Optional[Dict]) -> Dict[str, Any]:
         "confidence_floor": floor,
         "safety": safety,
         "has_symptom_spec": symptom_spec is not None,
+        "provenance_thread": provenance_thread,
     }
     return intake
 
@@ -92,5 +98,6 @@ def audit_event(intake: Dict[str, Any]) -> Dict[str, Any]:
         "confidence_floor": intake.get("confidence_floor"),
         "has_symptom_spec": intake.get("has_symptom_spec"),
         "safety_summary": safety_summary,
+        "provenance_thread": intake.get("provenance_thread"),
         "note": "confidence_floor propagated unchanged; A does not raise it",
     }

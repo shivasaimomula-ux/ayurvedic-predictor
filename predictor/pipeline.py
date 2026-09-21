@@ -187,6 +187,13 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
     # Refuse → never invent a FormulationInput for C.
     if status != "recommendation":
         formulation_input = None
+    thread = None
+    if formulation_input and isinstance(formulation_input.get("provenance_thread"), dict):
+        thread = formulation_input["provenance_thread"]
+    elif f_intake:
+        from . import formulation_export as _fe
+
+        thread = _fe.build_provenance_thread(f_intake)
     return {
         "input": user_input,
         "interpretation": interp,
@@ -202,7 +209,9 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
             "confidence_floor": f_intake.get("confidence_floor"),
             "safety": f_intake.get("safety"),
             "has_symptom_spec": f_intake.get("has_symptom_spec", False),
+            "provenance_thread": thread or f_intake.get("provenance_thread"),
         },
+        "provenance_thread": thread or f_intake.get("provenance_thread"),
         "note": note,
         "n_citations": len({e["pmid"] for e in evidence}),
         "models": {

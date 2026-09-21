@@ -63,6 +63,33 @@ def _dosage_form(outcome: Dict[str, Any]) -> str:
     return formulation.strip() or "oral"
 
 
+def build_provenance_thread(
+    f_intake: Optional[Dict[str, Any]] = None,
+    *,
+    formulation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Echo F IDs and mark Stage A on the run-thread (Task T22)."""
+    f_intake = f_intake or {}
+    base = f_intake.get("provenance_thread")
+    thread: Dict[str, Any]
+    if isinstance(base, dict) and base:
+        thread = dict(base)
+    else:
+        thread = {"schema_version": "1.0.0"}
+    spec_id = f_intake.get("spec_id") or thread.get("spec_id")
+    if spec_id:
+        thread["spec_id"] = str(spec_id)
+    if formulation_id:
+        thread["formulation_id"] = str(formulation_id)
+    stages = list(thread.get("stages") or [])
+    if "F" not in stages and thread.get("spec_id"):
+        stages.append("F")
+    if "A" not in stages:
+        stages.append("A")
+    thread["stages"] = stages
+    return thread
+
+
 def to_formulation_input(
     outcome: Dict[str, Any],
     *,
@@ -92,6 +119,8 @@ def to_formulation_input(
     if f_intake and f_intake.get("confidence_floor") is not None:
         note_parts.append(f"confidence_floor={f_intake['confidence_floor']}")
 
+    thread = build_provenance_thread(f_intake)
+
     return {
         "product_name": outcome.get("formula") or "Unnamed product",
         "product_category": config.FORMULATION_PRODUCT_CATEGORY,
@@ -105,4 +134,5 @@ def to_formulation_input(
         "handoff_note": "; ".join(note_parts),
         "ayurvedic_formulation": outcome.get("formulation"),
         "ayurvedic_delivery": outcome.get("delivery_system"),
+        "provenance_thread": thread,
     }

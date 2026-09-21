@@ -20,6 +20,11 @@ class FContextTests(unittest.TestCase):
             "spec_version": "1.0.0",
             "confidence_floor": 0.95,
             "jurisdiction": "IN",
+            "provenance_thread": {
+                "schema_version": "1.0.0",
+                "spec_id": "abc-123",
+                "stages": ["F"],
+            },
             "safety": {
                 "age_years": 34,
                 "sex_at_birth": "male",
@@ -37,6 +42,8 @@ class FContextTests(unittest.TestCase):
         self.assertEqual(intake["jurisdiction"], "IN")
         self.assertEqual(intake["safety"]["age_years"], 34)
         self.assertTrue(intake["has_symptom_spec"])
+        self.assertEqual(intake["provenance_thread"]["spec_id"], "abc-123")
+        self.assertIn("F", intake["provenance_thread"]["stages"])
 
         # Never raise: floor stays exactly what F sent.
         event = f_context.audit_event(intake)
@@ -93,6 +100,8 @@ class FormulationExportTests(unittest.TestCase):
         )
         self.assertIn("B Modernizer skipped", fi["handoff_note"])
         self.assertIn("spec_id=s1", fi["handoff_note"])
+        self.assertEqual(fi["provenance_thread"]["spec_id"], "s1")
+        self.assertIn("A", fi["provenance_thread"]["stages"])
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -105,6 +114,8 @@ class EnvelopeTests(unittest.TestCase):
         self.assertIsNone(env["formulation_input"])
         self.assertEqual(env["f_context"]["spec_id"], "x")
         self.assertEqual(env["f_context"]["confidence_floor"], 0.5)
+        self.assertEqual(env["provenance_thread"]["spec_id"], "x")
+        self.assertIn("A", env["provenance_thread"]["stages"])
 
 
 if __name__ == "__main__":

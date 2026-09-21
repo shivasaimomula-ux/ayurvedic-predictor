@@ -126,6 +126,11 @@ function render(res){
         <div class="meta">Delivery: ${esc(o.delivery_system)}</div>
         <div class="meta">Ayurvedic frame: ${esc(o.ayurvedic_frame||'—')}</div>
         <div class="meta">Overall evidence grade: <b>${esc(o.overall_evidence_grade)}</b></div>`;
+    const pt=res.provenance_thread||(res.f_context&&res.f_context.provenance_thread)||{};
+    if(pt.spec_id||pt.formulation_id||(res.f_context&&res.f_context.spec_id)){
+      h+=`<div class="meta">Provenance: spec_id=${esc(pt.spec_id||res.f_context.spec_id||'—')}`+
+         (pt.formulation_id?` → formulation_id=${esc(pt.formulation_id)}`:'')+`</div>`;
+    }
     o.substantiated_claims.forEach(c=>{
       h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
       c.citations.slice(0,3).forEach(ci=>{
