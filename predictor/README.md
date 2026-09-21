@@ -28,7 +28,8 @@ It fixes the two failure modes of the old fine-tuned-RAG approach:
 ```bash
 pip install -r predictor/requirements.txt
 # .env needs GEMINI_API_KEY (already present).
-# Optional: ANTHROPIC_API_KEY + VERIFIER_MODEL=claude-... for cross-model verification.
+# Cost order: NIM (optional NVIDIA_API_KEY) → Gemini verifier → Claude escalate only.
+# Prefer blue adjudication on :8011 when ADJUDICATION_PREFERRED=1 (see .env.example).
 ```
 
 ## Run
@@ -52,6 +53,6 @@ uvicorn predictor.api:app --reload --port 8000
   Extend `pipeline.predict` to rank multiple candidates by evidence grade.
 
 ## Next steps
-1. Cross-model verifier (add Anthropic key) to remove generator/verifier correlation.
+1. Shared PubMed/PMID cache with B (Task T16) — not in this tree yet.
 2. Multi-candidate ranking + herb–drug interaction safety stage.
 3. The non-circular evaluation harness (formulary recall, OOD/refusal, citation integrity).

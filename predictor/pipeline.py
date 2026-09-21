@@ -7,14 +7,21 @@ Stages (see architecture diagram):
   4. justification + safety (PubChem chemistry grounding)
   5. synthesis -> graded recommendation OR honest "insufficient evidence"
 Everything is recorded in an append-only audit trail.
+
+Handoffs (functional pipeline hardening):
+  - F context (spec_id, confidence_floor, safety) is consumed and echoed;
+    confidence_floor is never raised.
+  - On recommendation, emit C-shaped `formulation_input` with modernized_sku=null.
 """
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
-from . import config, agents, knowledge_graph
+from . import config, agents, knowledge_graph, f_context, formulation_export
 from .connectors import pubchem
+
+ProgressCb = Callable[[str, int, str, Optional[Dict[str, Any]]], None]
 
 
 def _now() -> str:
@@ -29,12 +36,35 @@ def _grade_label(evidence: List[Dict]) -> str:
     return best.get("evidence_level", "unknown")
 
 
-def predict(user_input: str, context: Dict | None = None) -> Dict:
-    context = context or {}
+def _progress(
+    cb: ProgressCb | None,
+    stage: str,
+    percent: int,
+    message: str,
+    detail: Optional[Dict[str, Any]] = None,
+) -> None:
+    if cb is None:
+        return
+    try:
+        cb(stage, percent, message, detail)
+    except Exception:  # noqa: BLE001 — progress must never break predict
+        pass
+
+
+def predict(
+    user_input: str,
+    context: Dict | None = None,
+    *,
+    on_progress: ProgressCb | None = None,
+) -> Dict:
+    intake = f_context.consume_f_context(context)
     audit: List[Dict] = []
 
     def log(stage, **data):
         audit.append({"ts": _now(), "stage": stage, **data})
+
+    log("f_context", **f_context.audit_event(intake))
+    _progress(on_progress, "interpret", 5, "Interpreting symptom…")
 
     # --- Stage 1 ------------------------------------------------------------
     interp = agents.interpret(user_input)
@@ -42,6 +72,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
     log("interpret", result=interp)
 
     # --- Stage 2 ------------------------------------------------------------
+    _progress(on_progress, "candidates", 15, "Generating candidates…")
     cand = knowledge_graph.generate_candidates(user_input)
     source = "curated"
 
@@ -60,16 +91,26 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
         source=source, n_candidates=len(cand["candidates"]))
 
     if not cand["candidates"]:
+        _progress(on_progress, "done", 100, "No candidates")
         return _envelope(user_input, interp, "insufficient_evidence", None, [],
-                         audit, source=source,
+                         audit, source=source, f_intake=intake,
                          note="Could not generate any candidate formulation for this input.")
 
     # MVP: evaluate the top candidate. (Extend to rank multiple candidates.)
     candidate = cand["candidates"][0]
 
     # --- Stage 3: evidence loop per claim -----------------------------------
+    claims = list(candidate.get("claims") or [])
     claim_results = []
-    for claim in candidate["claims"]:
+    for idx, claim in enumerate(claims):
+        pct = 20 + int(55 * ((idx + 1) / max(1, len(claims))))
+        _progress(
+            on_progress,
+            "evidence",
+            pct,
+            f"Verifying claim {idx + 1}/{len(claims)}…",
+            {"claim_index": idx, "claim_total": len(claims), "claim": claim},
+        )
         res = agents.evidence_loop(claim, condition)
         claim_results.append(res)
         log("evidence_loop", claim=claim, status=res["status"],
@@ -80,6 +121,7 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
     all_evidence = [e for c in claim_results for e in c["evidence"]]
 
     # --- Stage 4: justification + safety (chemistry grounding) --------------
+    _progress(on_progress, "chemistry", 80, "Grounding chemistry (PubChem)…")
     chemistry = []
     for name in candidate.get("phytochemicals", []):
         info = pubchem.compound(name)
@@ -89,9 +131,11 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
 
     # --- Stage 5: synthesis -------------------------------------------------
     # A recommendation requires at least one fully-substantiated claim.
+    _progress(on_progress, "synthesize", 90, "Synthesizing recommendation…")
     if not supported:
+        _progress(on_progress, "done", 100, "Insufficient evidence")
         return _envelope(user_input, interp, "insufficient_evidence", candidate,
-                         all_evidence, audit, source=source,
+                         all_evidence, audit, source=source, f_intake=intake,
                          note="No candidate claim could be substantiated with graded PubMed evidence.")
 
     outcome = {
@@ -118,24 +162,63 @@ def predict(user_input: str, context: Dict | None = None) -> Dict:
         "unsubstantiated_claims": [c["claim"] for c in claim_results if c["status"] != "supported"],
         "chemistry": chemistry,
         "overall_evidence_grade": _grade_label(all_evidence),
+        # Propagate F floor unchanged — A has no numeric confidence to raise.
+        "confidence_floor": intake.get("confidence_floor"),
+        "spec_id": intake.get("spec_id"),
+        "safety": intake.get("safety"),
     }
+    formulation_input = formulation_export.to_formulation_input(
+        outcome, f_intake=intake
+    )
+    log("formulation_export",
+        product_name=formulation_input.get("product_name"),
+        n_ingredients=len(formulation_input.get("ingredients") or []),
+        modernized_sku=formulation_input.get("modernized_sku"))
+    _progress(on_progress, "done", 100, "Complete")
     return _envelope(user_input, interp, "recommendation", candidate, all_evidence,
-                     audit, outcome=outcome, source=source)
+                     audit, outcome=outcome, source=source, f_intake=intake,
+                     formulation_input=formulation_input)
 
 
 def _envelope(user_input, interp, status, candidate, evidence, audit,
-              outcome=None, note=None, source="curated") -> Dict:
+              outcome=None, note=None, source="curated",
+              f_intake=None, formulation_input=None) -> Dict:
+    f_intake = f_intake or {}
+    # Refuse → never invent a FormulationInput for C.
+    if status != "recommendation":
+        formulation_input = None
+    thread = None
+    if formulation_input and isinstance(formulation_input.get("provenance_thread"), dict):
+        thread = formulation_input["provenance_thread"]
+    elif f_intake:
+        from . import formulation_export as _fe
+
+        thread = _fe.build_provenance_thread(f_intake)
     return {
         "input": user_input,
         "interpretation": interp,
         "status": status,                 # "recommendation" | "insufficient_evidence"
         "source": source,                 # "curated" | "ai_proposed"
         "outcome": outcome,
+        "formulation_input": formulation_input,  # C handoff; null on refusal / B skip null SKU
+        "f_context": {
+            "spec_id": f_intake.get("spec_id"),
+            "spec_version": f_intake.get("spec_version"),
+            "source": f_intake.get("source"),
+            "jurisdiction": f_intake.get("jurisdiction"),
+            "confidence_floor": f_intake.get("confidence_floor"),
+            "safety": f_intake.get("safety"),
+            "has_symptom_spec": f_intake.get("has_symptom_spec", False),
+            "provenance_thread": thread or f_intake.get("provenance_thread"),
+        },
+        "provenance_thread": thread or f_intake.get("provenance_thread"),
         "note": note,
         "n_citations": len({e["pmid"] for e in evidence}),
         "models": {
             "generator": config.GENERATOR_MODEL,
             "verifier": config.VERIFIER_MODEL,
+            "escalate": config.ESCALATE_MODEL,
+            "cost_order": list(config.VERIFIER_COST_ORDER),
             "cross_model": config.is_cross_model(),
             "cross_provider": config.is_cross_provider(),
         },

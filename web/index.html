@@ -25,6 +25,8 @@
         padding:.25rem .65rem;border-radius:999px;cursor:pointer}
   .chip:hover{background:#d8eae5}
   .note{font-size:.8rem;color:var(--muted);margin-top:.7rem}
+  .note b{color:var(--ink)}
+  /* Each query runs as an async job; this UI polls its own progress (not a mega dashboard). */
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
         padding:1.3rem 1.4rem;margin-top:1.4rem}
   .badge{display:inline-block;font-size:.72rem;font-weight:700;text-transform:uppercase;
@@ -57,7 +59,7 @@
     <button id="go">Analyze</button>
   </div>
   <div class="chips" id="chips"></div>
-  <div class="note">Each query runs live literature search + verification — expect <b>30–90 seconds</b>.</div>
+  <div class="note">Each query is an async job (PubMed + verification). This page polls <b>its own</b> job progress — expect <b>30–90 seconds</b>.</div>
 
   <div id="out"></div>
   <p class="disc" id="disc"></p>
@@ -79,13 +81,32 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 async function run(){
   const query=q.value.trim(); if(!query)return;
   btn.disabled=true; out.innerHTML=''; disc.textContent='';
-  out.innerHTML=`<div class="card"><span class="spin"></span>Searching PubMed and verifying evidence…</div>`;
+  out.innerHTML=`<div class="card"><span class="spin"></span><span id="prog">Submitting job…</span></div>`;
+  const prog=()=>document.getElementById('prog');
   try{
-    const r=await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},
+    const submit=await fetch('/jobs/predict',{method:'POST',headers:{'Content-Type':'application/json'},
                                     body:JSON.stringify({query})});
-    render(await r.json());
+    if(!submit.ok){
+      // Fallback to sync /predict for older servers
+      const r=await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},
+                                      body:JSON.stringify({query})});
+      render(await r.json());
+      return;
+    }
+    let job=await submit.json();
+    const pollUrl=job.poll_url||(`/jobs/${job.job_id}`);
+    while(job.status==='queued'||job.status==='running'){
+      const p=job.progress||{};
+      if(prog()) prog.textContent=`${p.message||job.status} (${p.percent||0}%)`;
+      await new Promise(r=>setTimeout(r,800));
+      const pr=await fetch(pollUrl);
+      if(!pr.ok) throw new Error('Poll failed: '+pr.status);
+      job=await pr.json();
+    }
+    if(job.status==='succeeded'&&job.result){ render(job.result); return; }
+    throw new Error(job.error||('Job '+job.status));
   }catch(e){ out.innerHTML=`<div class="card">Error: ${esc(String(e))}. Is the server running?</div>`; }
-  btn.disabled=false;
+  finally{ btn.disabled=false; }
 }
 
 function render(res){
@@ -105,6 +126,11 @@ function render(res){
         <div class="meta">Delivery: ${esc(o.delivery_system)}</div>
         <div class="meta">Ayurvedic frame: ${esc(o.ayurvedic_frame||'—')}</div>
         <div class="meta">Overall evidence grade: <b>${esc(o.overall_evidence_grade)}</b></div>`;
+    const pt=res.provenance_thread||(res.f_context&&res.f_context.provenance_thread)||{};
+    if(pt.spec_id||pt.formulation_id||(res.f_context&&res.f_context.spec_id)){
+      h+=`<div class="meta">Provenance: spec_id=${esc(pt.spec_id||res.f_context.spec_id||'—')}`+
+         (pt.formulation_id?` → formulation_id=${esc(pt.formulation_id)}`:'')+`</div>`;
+    }
     o.substantiated_claims.forEach(c=>{
       h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
       c.citations.slice(0,3).forEach(ci=>{
