@@ -24,3 +24,7 @@ node_modules/
 .vscode/
 *.log
 .pytest_cache/
+
+# Finder duplicate junk (Finding #22)
+* 2.py
+* 2.*
