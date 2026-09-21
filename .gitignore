@@ -19,3 +19,7 @@ node_modules/
 .idea/
 .vscode/
 *.log
+
+# Finder duplicate junk (Finding #22) — never commit "foo 2.py" copies
+* 2.py
+* 2.*
