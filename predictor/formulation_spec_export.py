@@ -196,6 +196,8 @@ def to_formulation_spec(
         "inherited_confidence": inherited,
         "source_stage": "A:recommender",
         "source_spec_id": f_intake.get("spec_id") or outcome.get("spec_id"),
+        # N3.1 — unlabeled adapt path is demo (not CoA/lab-backed).
+        "identity_source": "demo",
     }
     # Validate against shared contract (strict / unknown fields forbidden).
     return FormulationSpec.model_validate(payload).model_dump(mode="json")
