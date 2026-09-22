@@ -117,6 +117,8 @@ def health():
             "port_contract": 8000,
             "formulation_export": True,
             "formulation_spec_export": True,
+            "coa_stub": True,
+            "identity_source_labels": ["demo", "coa_file", "lab"],
             "contracts": "herbenzo-contracts",
             "async_jobs": True,
             "predict_job_timeout_s": config.PREDICT_JOB_TIMEOUT_S,
@@ -128,6 +130,50 @@ def predict(req: PredictRequest):
     """Synchronous predict (backward compatible). Prefer /jobs/predict for UIs."""
     result = pipeline.predict(req.query, req.context)
     return _finalize_predict_result(result, req.context)
+
+
+class CoAStubRequest(BaseModel):
+    """N3.1 — file-based CoA stub body (JSON). Path alternative via coa_path."""
+
+    stub: Optional[Dict[str, Any]] = None
+    coa_path: Optional[str] = None
+    source_spec_id: Optional[str] = None
+    confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+
+
+@app.post("/formulation-spec/from-coa")
+def formulation_spec_from_coa(req: CoAStubRequest):
+    """Resolve CoA stub → FormulationSpec (identity_source=coa_file).
+
+    Refuses missing identity or quantity_mg (no silent demo invent).
+    """
+    from . import coa_stub
+
+    try:
+        if req.coa_path:
+            spec = coa_stub.formulation_spec_from_coa_path(
+                req.coa_path,
+                source_spec_id=req.source_spec_id,
+                confidence=req.confidence,
+            )
+        elif isinstance(req.stub, dict) and req.stub:
+            spec = coa_stub.coa_stub_to_formulation_spec(
+                req.stub,
+                source_spec_id=req.source_spec_id,
+                confidence=req.confidence,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "coa_stub_incomplete",
+                    "message": "provide stub object or coa_path",
+                },
+            )
+        contract_gate.validate_outbound_formulation_spec(spec)
+        return spec
+    except coa_stub.CoAStubIncomplete as exc:
+        raise HTTPException(status_code=422, detail=exc.body) from exc
 
 
 @app.post("/jobs/predict", status_code=202)
