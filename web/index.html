@@ -47,6 +47,10 @@
   .spin{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;
         border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:.4rem}
   @keyframes s{to{transform:rotate(360deg)}}
+  /* N4.1 — thin federated handoff strip (not a mega-dashboard) */
+  .handoff-strip{margin-top:.85rem;padding:.65rem .8rem;border:1px dashed #cfe5e0;border-radius:10px;
+                 background:#f3f8f6;font-size:.8rem;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .handoff-strip .ok{color:var(--green);font-weight:700} .handoff-strip .no{color:var(--amber);font-weight:700}
 </style>
 </head>
 <body>
@@ -127,10 +131,25 @@ function render(res){
         <div class="meta">Ayurvedic frame: ${esc(o.ayurvedic_frame||'—')}</div>
         <div class="meta">Overall evidence grade: <b>${esc(o.overall_evidence_grade)}</b></div>`;
     const pt=res.provenance_thread||(res.f_context&&res.f_context.provenance_thread)||{};
-    if(pt.spec_id||pt.formulation_id||(res.f_context&&res.f_context.spec_id)){
-      h+=`<div class="meta">Provenance: spec_id=${esc(pt.spec_id||res.f_context.spec_id||'—')}`+
-         (pt.formulation_id?` → formulation_id=${esc(pt.formulation_id)}`:'')+`</div>`;
-    }
+    const spec=res.formulation_spec;
+    const fin=res.formulation_input;
+    const bReady=!!(spec&&!res.formulation_spec_error);
+    const cReady=!!fin;
+    const stages=Array.isArray(pt.stages)?pt.stages.join(','):(pt.stages||'F,A');
+    const chain=[
+      (pt.spec_id||(res.f_context&&res.f_context.spec_id))?`spec_id=${pt.spec_id||res.f_context.spec_id}`:null,
+      pt.formulation_id?`formulation_id=${pt.formulation_id}`:(spec&&spec.formulation_id?`formulation_id=${spec.formulation_id}`:null),
+      pt.sku_id?`sku_id=${pt.sku_id}`:null,
+    ].filter(Boolean).join(' → ');
+    const idSrc=(spec&&spec.identity_source)||'—';
+    h+=`<div class="handoff-strip" role="status">`+
+       `Handoff · <span class="${bReady?'ok':'no'}">${bReady?'→B ready':'→B blocked'}</span>`+
+       ` · <span class="${cReady?'ok':'no'}">${cReady?'→C ready':'→C n/a'}</span>`+
+       ` · identity_source=${esc(idSrc)}`+
+       ` · stages=[${esc(String(stages))}]`+
+       (chain?`<br>Provenance: ${esc(chain)}`:'')+
+       (res.formulation_spec_error?`<br>formulation_spec_error: ${esc(String(res.formulation_spec_error))}`:'')+
+       `</div>`;
     o.substantiated_claims.forEach(c=>{
       h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
       c.citations.slice(0,3).forEach(ci=>{
