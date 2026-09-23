@@ -94,6 +94,15 @@ function frameText(v){
   }
   return String(v);
 }
+function errText(v){
+  if(v==null||v==='') return '';
+  if(typeof v==='string') return v;
+  if(typeof v==='object'){
+    if(v.message) return String(v.message);
+    try{ return JSON.stringify(v); }catch(_){ return '[error]'; }
+  }
+  return String(v);
+}
 function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
 async function run(){
@@ -162,7 +171,7 @@ function render(res){
        ` · identity_source=${esc(idSrc)}`+
        ` · stages=[${esc(String(stages))}]`+
        (chain?`<br>Provenance: ${esc(chain)}`:'')+
-       (res.formulation_spec_error?`<br>formulation_spec_error: ${esc(String(res.formulation_spec_error))}`:'')+
+       (res.formulation_spec_error?`<br>formulation_spec_error: ${esc(errText(res.formulation_spec_error))}`:'')+
        `</div>`;
     o.substantiated_claims.forEach(c=>{
       h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
