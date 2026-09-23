@@ -28,18 +28,19 @@ def _verdict(supported: bool, reason: str = "ok") -> dict:
 
 
 class CostOrderDefaultsTests(unittest.TestCase):
-    def test_cost_order_is_nim_gemini_claude(self):
-        self.assertEqual(config.VERIFIER_COST_ORDER, ("nim", "gemini", "claude"))
+    def test_cost_order_is_nim_gemini(self):
+        """Stage A approved stack: NIM → Gemini; Claude off the default order."""
+        self.assertEqual(config.VERIFIER_COST_ORDER, ("nim", "gemini"))
 
     def test_default_verifier_is_not_claude(self):
-        """Finding #11: even with Anthropic key present, default is Gemini."""
+        """Finding #11 / Stage A: default verifier is Nemotron Ultra, not Claude."""
         self.assertFalse(
             config.VERIFIER_MODEL.lower().startswith("claude"),
             msg=f"VERIFIER_MODEL unexpectedly Claude: {config.VERIFIER_MODEL}",
         )
         self.assertFalse(config.default_verifier_is_claude())
 
-    def test_claude_verifier_env_is_coerced_to_gemini(self):
+    def test_claude_verifier_env_is_coerced_to_nim(self):
         """Old .env VERIFIER_MODEL=claude-* must not stay on the volume path."""
         import importlib
         import os
@@ -48,19 +49,16 @@ class CostOrderDefaultsTests(unittest.TestCase):
             os.environ,
             {
                 "VERIFIER_MODEL": "claude-sonnet-4-6",
-                "ESCALATE_MODEL": "",
+                "A_CLAUDE_ESCALATE": "0",
             },
             clear=False,
         ):
-            # ESCALATE_MODEL empty → os.getenv returns ""; treat as unset in test
-            # by deleting empty override after patch if needed.
-            os.environ.pop("ESCALATE_MODEL", None)
             os.environ["VERIFIER_MODEL"] = "claude-sonnet-4-6"
+            os.environ["A_CLAUDE_ESCALATE"] = "0"
             reloaded = importlib.reload(config)
-            self.assertEqual(reloaded.VERIFIER_MODEL, "gemini-2.5-pro")
-            self.assertTrue(reloaded.ESCALATE_MODEL.startswith("claude"))
+            self.assertFalse(reloaded.VERIFIER_MODEL.lower().startswith("claude"))
+            self.assertIn("nemotron", reloaded.VERIFIER_MODEL.lower())
             self.assertFalse(reloaded.default_verifier_is_claude())
-        # Restore module state for sibling tests.
         importlib.reload(config)
 
     def test_cheap_providers_exclude_claude(self):
@@ -98,7 +96,13 @@ class LocalCascadeEscalateTests(unittest.TestCase):
         self.assertTrue(result["supported"])
         self.assertFalse(result["escalated"])
         self.assertEqual(len(calls), 1)
-        self.assertTrue(calls[0].startswith("nim/") or "meta/" in calls[0])
+        self.assertTrue(
+            calls[0].startswith("nim/")
+            or "meta/" in calls[0]
+            or "nvidia/" in calls[0]
+            or "nemotron" in calls[0].lower(),
+            msg=calls,
+        )
         self.assertFalse(any(c.startswith("claude") for c in calls))
 
     def test_both_cheap_reject_skips_claude(self):
@@ -129,7 +133,12 @@ class LocalCascadeEscalateTests(unittest.TestCase):
             calls.append(model)
             if model.startswith("claude"):
                 return _verdict(False, "claude hard reject")
-            if model.startswith("nim/") or model.startswith("meta/"):
+            if (
+                model.startswith("nim/")
+                or model.startswith("meta/")
+                or model.startswith("nvidia/")
+                or "nemotron" in model.lower()
+            ):
                 return _verdict(False, "nim reject")
             return _verdict(True, "gemini support")  # disagreement
 
@@ -148,6 +157,38 @@ class LocalCascadeEscalateTests(unittest.TestCase):
         self.assertTrue(any(c.startswith("claude") for c in calls))
         self.assertIn("claude", result["verifier_path"])
 
+    def test_disagreement_escalates_to_nim_super_by_default(self):
+        """A_CLAUDE_ESCALATE off → escalate uses Nemotron Super, not Claude."""
+        calls: list[str] = []
+
+        def fake_complete(prompt, model, system=None):
+            calls.append(model)
+            if "super" in model.lower() or model == config.NIM_MODEL_FALLBACK:
+                return _verdict(True, "super support")
+            if (
+                model.startswith("nim/")
+                or model.startswith("meta/")
+                or model.startswith("nvidia/")
+                or "ultra" in model.lower()
+            ):
+                return _verdict(False, "ultra reject")
+            return _verdict(True, "gemini support")
+
+        with mock.patch.object(config, "NVIDIA_API_KEY", "nv-test"), \
+             mock.patch.object(config, "GEMINI_API_KEY", "gm-test"), \
+             mock.patch.object(config, "ANTHROPIC_API_KEY", "sk-ant-test"), \
+             mock.patch.object(
+                 config, "ESCALATE_MODEL", "nvidia/llama-3.3-nemotron-super-49b-v1"
+             ):
+            result = claim_verifier.verify_claim_cascade(
+                "Withania somnifera reduces stress",
+                _ARTICLE,
+                prefer_adjudication=False,
+                complete_json=fake_complete,
+            )
+        self.assertTrue(result["escalated"])
+        self.assertFalse(any(c.startswith("claude") for c in calls))
+        self.assertIn("nim_escalate", result["verifier_path"])
     def test_force_hard_reject_escalates_even_without_second_cheap(self):
         calls: list[str] = []
 

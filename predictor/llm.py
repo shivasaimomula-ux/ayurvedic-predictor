@@ -99,17 +99,43 @@ def complete(prompt: str, model: str, json_mode: bool = False,
         body = resp.json()
         return body["choices"][0]["message"]["content"] or ""
 
-    # Gemini path
+    # Gemini path (with Flash 3.x → 2.5 fallbacks)
     if not config.GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set.")
     from google.genai import types
-    cfg = types.GenerateContentConfig(
-        system_instruction=system,
-        response_mime_type="application/json" if json_mode else "text/plain",
-        temperature=0.2,
-    )
-    resp = _gemini().models.generate_content(model=model, contents=prompt, config=cfg)
-    return resp.text or ""
+
+    candidates: list[str] = []
+    for m in (model, *getattr(config, "GENERATOR_MODEL_FALLBACKS", ())):
+        if m and m not in candidates and not is_claude_model(m) and not is_nim_model(m):
+            candidates.append(m)
+    if not candidates:
+        candidates = [model]
+
+    last_err: Exception | None = None
+    for mid in candidates:
+        cfg = types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json" if json_mode else "text/plain",
+            temperature=0.2,
+        )
+        try:
+            resp = _gemini().models.generate_content(
+                model=mid, contents=prompt, config=cfg
+            )
+            return resp.text or ""
+        except Exception as e:  # noqa: BLE001 — try next Flash id
+            last_err = e
+            msg = str(e).lower()
+            # Only fall through on model-not-found / invalid argument; else raise.
+            if not any(
+                s in msg
+                for s in ("not found", "not supported", "invalid", "404", "unknown model")
+            ):
+                raise
+            continue
+    if last_err:
+        raise last_err
+    return ""
 
 
 def complete_json(prompt: str, model: str, system: Optional[str] = None) -> dict:

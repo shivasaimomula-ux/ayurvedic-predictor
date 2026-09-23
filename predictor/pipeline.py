@@ -152,7 +152,8 @@ def predict(
         "formulation": candidate["formulation"],
         "delivery_system": candidate["delivery"],
         "herbs": candidate["herbs"],
-        "ayurvedic_frame": cand["ayurvedic_frame"],
+        "ayurvedic_frame": agents._frame_to_str(cand.get("ayurvedic_frame"))
+            or agents._frame_to_str(candidate.get("ayurvedic_frame")),
         "source": source,
         "ai_proposed": source == "ai_proposed",
         "substantiated_claims": [

@@ -16,27 +16,49 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY") or os.getenv("NIM_API_KEY")
 NIM_BASE_URL = (
     os.getenv("NIM_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
-NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.1-70b-instruct")
+# Stage A (approved 2026-09-23): verifier = Nemotron 3 Ultra (cross-provider vs Gemini).
+# Super is fallback only when Ultra is unavailable on the key.
+NIM_MODEL = os.getenv(
+    "NIM_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+)
+NIM_MODEL_FALLBACK = os.getenv(
+    "NIM_MODEL_FALLBACK", "nvidia/llama-3.3-nemotron-super-49b-v1"
+)
 
-# Cost order (Audit Finding #11): NVIDIA (NIM) > Gemini > Claude.
-# Claude is escalate-only (disagreement / hard-reject), never the default volume path.
-VERIFIER_COST_ORDER = ("nim", "gemini", "claude")
+# Stage A volume path: NVIDIA NIM → Gemini. Claude is OFF by default for this
+# recommend-UI version (cross-provider = Gemini generate + NIM verify).
+VERIFIER_COST_ORDER = ("nim", "gemini")
 
-# Generator and cheap verifier are deliberately separable (reduces correlated
-# hallucination). Defaults:
-#   - generator: gemini-2.5-flash (fast)
-#   - cheap verifier: gemini-2.5-pro (stronger Gemini — NOT Claude)
-#   - escalate: Claude only when cheap providers disagree or hard-reject is forced
-GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemini-2.5-flash")
-_raw_verifier = os.getenv("VERIFIER_MODEL", "gemini-2.5-pro")
-# Cost guardrail: Claude must never be the volume verifier. If an old .env still
-# sets VERIFIER_MODEL=claude-*, coerce to Gemini and keep Claude as escalate.
+# Generator and verifier are different providers (anti-hallucination):
+#   - generator: Gemini Flash 3.5 / 3.8 (falls back to 2.5 Flash if needed)
+#   - verifier:  Nemotron 3 Ultra on NIM
+GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemini-3.5-flash")
+# Prefer Flash 3.x; llm.complete() walks this list on Gemini 404/not-found.
+GENERATOR_MODEL_FALLBACKS = tuple(
+    m.strip()
+    for m in os.getenv(
+        "GENERATOR_MODEL_FALLBACKS",
+        "gemini-3.8-flash,gemini-3.5-flash,gemini-2.5-flash,gemini-2.0-flash",
+    ).split(",")
+    if m.strip()
+)
+
+_raw_verifier = os.getenv("VERIFIER_MODEL", NIM_MODEL)
+# Claude must never be the volume verifier on Stage A.
 if _raw_verifier.lower().startswith("claude"):
-    VERIFIER_MODEL = "gemini-2.5-pro"
-    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", _raw_verifier)
+    VERIFIER_MODEL = NIM_MODEL
 else:
     VERIFIER_MODEL = _raw_verifier
+
+# Claude escalate disabled unless explicitly opted in (A_CLAUDE_ESCALATE=1).
+_claude_escalate = os.getenv("A_CLAUDE_ESCALATE", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+if _claude_escalate:
     ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", "claude-sonnet-4-6")
+else:
+    # Re-verify with Super / same NIM stack — never Claude for this version.
+    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", NIM_MODEL_FALLBACK)
 
 # Prefer blue adjudication service (:8011) when reachable; else local cascade.
 ADJUDICATION_URL = (

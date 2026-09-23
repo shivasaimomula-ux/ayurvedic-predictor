@@ -18,7 +18,11 @@ from typing import List, Dict
 # formulations. A claim = (subject, predicate) the verifier must substantiate.
 SEED: Dict[str, Dict] = {
     "respiratory": {
-        "synonyms": ["cough", "cold", "bronchitis", "respiratory", "throat", "phlegm", "kasa"],
+        "synonyms": [
+            "cough", "cold", "bronchitis", "respiratory", "throat", "phlegm", "kasa",
+            "pneumonia", "flu", "influenza", "shortness of breath", "dyspnea",
+            "wheeze", "congestion", "sinus",
+        ],
         "ayurvedic_frame": "Kapha-Vata aggravation in Pranavaha srotas (respiratory channels)",
         "candidates": [
             {

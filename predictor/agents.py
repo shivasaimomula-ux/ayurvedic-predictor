@@ -82,6 +82,26 @@ _PROPOSE_SYS = (
 )
 
 
+def _frame_to_str(frame) -> str | None:
+    """LLM sometimes returns ayurvedic_frame as an object — UI must get a string."""
+    if frame is None or frame == "":
+        return None
+    if isinstance(frame, str):
+        return frame
+    if isinstance(frame, dict):
+        parts = []
+        for k, v in frame.items():
+            if v is None or v == "":
+                continue
+            if isinstance(v, (list, tuple)):
+                v = ", ".join(str(x) for x in v)
+            parts.append(f"{k}: {v}" if not str(k).isdigit() else str(v))
+        return "; ".join(parts) if parts else None
+    if isinstance(frame, (list, tuple)):
+        return "; ".join(str(x) for x in frame if x)
+    return str(frame)
+
+
 def propose_candidate(user_input: str, interpretation: Dict) -> Dict | None:
     """LLM-proposed candidate for symptoms not in the curated knowledge graph.
 
@@ -91,28 +111,48 @@ def propose_candidate(user_input: str, interpretation: Dict) -> Dict | None:
     """
     if not config.llm_available():
         return None
-    frame = interpretation.get("ayurvedic_frame")
+    if not config.gemini_usable() and not config.nim_usable():
+        # Need a generator; prefer Gemini, allow NIM if Gemini missing.
+        return None
+    frame = _frame_to_str(interpretation.get("ayurvedic_frame"))
     targets = interpretation.get("modern_targets")
     prompt = (
         f"Symptom/condition: {user_input}\n"
         f"Modern targets (if known): {targets}\n"
         f"Ayurvedic frame (if known): {frame}\n"
     )
+    gen = config.GENERATOR_MODEL
     try:
-        c = llm.complete_json(prompt, config.GENERATOR_MODEL, system=_PROPOSE_SYS)
+        c = llm.complete_json(prompt, gen, system=_PROPOSE_SYS)
     except Exception:  # noqa: BLE001
-        return None
+        # One retry on NIM if Gemini path failed (keys permitting).
+        if config.nim_usable():
+            try:
+                c = llm.complete_json(
+                    prompt, f"nim/{config.NIM_MODEL}", system=_PROPOSE_SYS
+                )
+            except Exception:  # noqa: BLE001
+                return None
+        else:
+            return None
     if not c.get("formula") or not c.get("claims"):
+        return None
+    claims = [str(x) for x in c.get("claims", []) if str(x).strip()][:3]
+    if not claims:
         return None
     return {
         "formula": c.get("formula"),
         "type": "ai_proposed",
         "formulation": c.get("formulation", "Churna"),
         "delivery": c.get("delivery", "Oral"),
-        "ayurvedic_frame": c.get("ayurvedic_frame", frame),
-        "herbs": c.get("herbs", []),
-        "phytochemicals": c.get("phytochemicals", []),
-        "claims": [str(x) for x in c.get("claims", [])][:3],
+        "ayurvedic_frame": _frame_to_str(c.get("ayurvedic_frame")) or frame,
+        "herbs": c.get("herbs", []) if isinstance(c.get("herbs"), list) else [],
+        "phytochemicals": (
+            c.get("phytochemicals", [])
+            if isinstance(c.get("phytochemicals"), list)
+            else []
+        ),
+        "claims": claims,
     }
 
 
