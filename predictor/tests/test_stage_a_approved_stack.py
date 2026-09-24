@@ -65,6 +65,12 @@ class TestStageAApprovedStack(unittest.TestCase):
         self.assertIsInstance(c["ayurvedic_frame"], str)
         self.assertIn("Kapha", c["ayurvedic_frame"])
 
+    def test_force_ai_propose_defaults_on(self):
+        self.assertTrue(config.FORCE_AI_PROPOSE)
+
+    def test_adjudication_preferred_defaults_off(self):
+        self.assertFalse(config.ADJUDICATION_PREFERRED)
+
     def test_force_ai_propose_skips_curated(self):
         from predictor import pipeline
 

@@ -28,8 +28,9 @@ It fixes the two failure modes of the old fine-tuned-RAG approach:
 ```bash
 pip install -r predictor/requirements.txt
 # .env needs GEMINI_API_KEY (already present).
-# Cost order: NIM (optional NVIDIA_API_KEY) → Gemini verifier → Claude escalate only.
-# Prefer blue adjudication on :8011 when ADJUDICATION_PREFERRED=1 (see .env.example).
+# Cost order: NIM Ultra → Gemini verifier (Claude escalate opt-in via A_CLAUDE_ESCALATE=1).
+# ADJUDICATION_PREFERRED=0 by default (local LLM verify). Set 1 to prefer blue :8011.
+# A_FORCE_AI_PROPOSE=1 by default so every Analyze runs propose LLM.
 ```
 
 ## Run

@@ -76,28 +76,59 @@ def complete(prompt: str, model: str, json_mode: bool = False,
     if is_nim_model(model):
         if not config.NVIDIA_API_KEY:
             raise RuntimeError("NVIDIA_API_KEY not set but a NIM model was requested.")
-        nim_model = resolve_nim_model(model)
-        payload = {
-            "model": nim_model,
-            "messages": [
-                {"role": "system", "content": system or ""},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 2048,
-        }
-        resp = requests.post(
-            f"{config.NIM_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {config.NVIDIA_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=60,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        return body["choices"][0]["message"]["content"] or ""
+        nim_candidates: list[str] = []
+        for m in (
+            resolve_nim_model(model),
+            getattr(config, "NIM_MODEL", None),
+            getattr(config, "NIM_MODEL_FALLBACK", None),
+        ):
+            if m and m not in nim_candidates:
+                nim_candidates.append(m)
+        last_err: Exception | None = None
+        for nim_model in nim_candidates:
+            payload = {
+                "model": nim_model,
+                "messages": [
+                    {"role": "system", "content": system or ""},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048,
+            }
+            try:
+                resp = requests.post(
+                    f"{config.NIM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {config.NVIDIA_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=45,
+                )
+                if resp.status_code in {404, 410, 503}:
+                    last_err = requests.HTTPError(
+                        f"{resp.status_code} for NIM model {nim_model}",
+                        response=resp,
+                    )
+                    continue
+                resp.raise_for_status()
+                body = resp.json()
+                return body["choices"][0]["message"]["content"] or ""
+            except requests.HTTPError as e:
+                last_err = e
+                code = getattr(e.response, "status_code", None)
+                if code in {404, 410, 503}:
+                    continue
+                raise
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                msg = str(e).lower()
+                if any(s in msg for s in ("404", "410", "503", "not found", "unavailable")):
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        return ""
 
     # Gemini path (with Flash 3.x → 2.5 fallbacks)
     if not config.GEMINI_API_KEY:

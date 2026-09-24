@@ -136,7 +136,10 @@ def predict(
         claim_results.append(res)
         log("evidence_loop", claim=claim, status=res["status"],
             iterations=res["iterations_used"],
-            supporting=[e["pmid"] for e in res["evidence"]])
+            supporting=[e["pmid"] for e in res["evidence"]],
+            verifiers_seen=res.get("verifiers_seen") or [],
+            n_articles_verified=res.get("n_articles_verified") or 0,
+            retrieved_pmids=(res.get("retrieved_pmids") or [])[:20])
 
     supported = [c for c in claim_results if c["status"] == "supported"]
     all_evidence = [e for c in claim_results for e in c["evidence"]]
@@ -226,33 +229,53 @@ def _live_path_summary(
 ) -> Dict[str, Any]:
     """Operator-facing proof that this response was not a fixture replay."""
     interpret_llm = bool(interp.get("_llm")) if isinstance(interp, dict) else False
-    verified_by = sorted({
+    interpret_model = None
+    if isinstance(interp, dict) and interp.get("_interpret_model"):
+        interpret_model = str(interp.get("_interpret_model"))
+    verified_by = {
         str(e.get("verified_by"))
         for e in evidence
         if e.get("verified_by")
-    })
+    }
     pubmed_iterations = 0
     pubmed_retrieved = 0
+    n_articles_verified = 0
     for ev in audit:
         if ev.get("stage") != "evidence_loop":
             continue
-        # Prefer trail on claim results if present in nested structures later;
-        # audit only stores status — count supporting PMIDs as evidence activity.
         pubmed_retrieved += len(ev.get("supporting") or [])
+        pubmed_retrieved += len(ev.get("retrieved_pmids") or [])
         pubmed_iterations += int(ev.get("iterations") or 0)
+        n_articles_verified += int(ev.get("n_articles_verified") or 0)
+        for vb in ev.get("verifiers_seen") or []:
+            if vb:
+                verified_by.add(str(vb))
+    # Drop non-model path labels that are not verifier identities.
+    verified_by_list = sorted(
+        v for v in verified_by
+        if v and v not in {"None", "none"}
+    )
     degraded = (not interpret_llm) or (
         source == "ai_proposed" and not propose_ran
     )
     return {
         "mode": "live",
         "interpret_llm": interpret_llm,
+        "interpret_model": interpret_model,
         "candidate_source": source,
         "propose_ran": propose_ran,
         "force_ai_propose": bool(config.FORCE_AI_PROPOSE),
         "skipped_curated": skipped_curated,
         "pubmed_evidence_iterations": pubmed_iterations,
         "n_supporting_pmids": len({e.get("pmid") for e in evidence if e.get("pmid")}),
-        "verified_by": verified_by,
+        "n_articles_verified": n_articles_verified,
+        "n_pmids_retrieved": len({
+            pmid
+            for ev in audit
+            if ev.get("stage") == "evidence_loop"
+            for pmid in (ev.get("retrieved_pmids") or [])
+        }),
+        "verified_by": verified_by_list,
         "degraded": degraded,
         "note": (
             "PubMed PMID disk cache may speed retrieval; LLMs still run. "

@@ -52,14 +52,31 @@ def interpret(user_input: str) -> Dict:
     if not config.llm_available():
         return {"normalized_condition": user_input, "modern_targets": [],
                 "ayurvedic_frame": None, "_llm": False}
-    try:
-        data = llm.complete_json(
-            f"Symptom/problem: {user_input}", config.GENERATOR_MODEL, system=_INTERPRET_SYS)
-        data["_llm"] = True
-        return data
-    except Exception as e:  # noqa: BLE001 - degrade gracefully
-        return {"normalized_condition": user_input, "modern_targets": [],
-                "ayurvedic_frame": None, "_llm": False, "_error": str(e)}
+    prompt = f"Symptom/problem: {user_input}"
+    errors: list[str] = []
+    # Prefer Gemini generator; fall back to NIM so Gemini spend caps do not
+    # silently skip interpretation (volume path must stay LLM-backed).
+    attempts: list[str] = [config.GENERATOR_MODEL]
+    if config.nim_usable():
+        attempts.append(f"nim/{config.NIM_MODEL}")
+        if config.NIM_MODEL_FALLBACK and config.NIM_MODEL_FALLBACK != config.NIM_MODEL:
+            attempts.append(f"nim/{config.NIM_MODEL_FALLBACK}")
+    for model in attempts:
+        try:
+            data = llm.complete_json(prompt, model, system=_INTERPRET_SYS)
+            data["_llm"] = True
+            data["_interpret_model"] = model
+            return data
+        except Exception as e:  # noqa: BLE001 - try next provider
+            errors.append(f"{model}: {e}")
+            continue
+    return {
+        "normalized_condition": user_input,
+        "modern_targets": [],
+        "ayurvedic_frame": None,
+        "_llm": False,
+        "_error": " | ".join(errors)[:800],
+    }
 
 
 # --- Stage 2b: open candidate proposal (fallback when KG has no match) -------
@@ -121,21 +138,22 @@ def propose_candidate(user_input: str, interpretation: Dict) -> Dict | None:
         f"Modern targets (if known): {targets}\n"
         f"Ayurvedic frame (if known): {frame}\n"
     )
-    gen = config.GENERATOR_MODEL
-    try:
-        c = llm.complete_json(prompt, gen, system=_PROPOSE_SYS)
-    except Exception:  # noqa: BLE001
-        # One retry on NIM if Gemini path failed (keys permitting).
-        if config.nim_usable():
-            try:
-                c = llm.complete_json(
-                    prompt, f"nim/{config.NIM_MODEL}", system=_PROPOSE_SYS
-                )
-            except Exception:  # noqa: BLE001
-                return None
-        else:
-            return None
-    if not c.get("formula") or not c.get("claims"):
+    attempts: list[str] = [config.GENERATOR_MODEL]
+    if config.nim_usable():
+        attempts.append(f"nim/{config.NIM_MODEL}")
+        if config.NIM_MODEL_FALLBACK and config.NIM_MODEL_FALLBACK != config.NIM_MODEL:
+            attempts.append(f"nim/{config.NIM_MODEL_FALLBACK}")
+    c = None
+    for model in attempts:
+        try:
+            c = llm.complete_json(prompt, model, system=_PROPOSE_SYS)
+            if c:
+                c["_propose_model"] = model
+                break
+        except Exception:  # noqa: BLE001 — try next provider
+            c = None
+            continue
+    if not c or not c.get("formula") or not c.get("claims"):
         return None
     claims = [str(x) for x in c.get("claims", []) if str(x).strip()][:3]
     if not claims:
@@ -176,7 +194,7 @@ def escalated_query(claim: str, condition: str, iteration: int) -> str:
 
 
 # --- Stage 3b: verification agent (cost-ordered cascade) --------------------
-# Prefer blue adjudication (:8011) → local NIM → Gemini; Claude escalate only.
+# Default: local NIM Ultra → Gemini. Blue Adj (:8011) only if ADJUDICATION_PREFERRED=1.
 # See claim_verifier.py (Task T15 / Audit Finding #11).
 
 
@@ -240,6 +258,8 @@ def evidence_loop(claim: str, condition: str) -> Dict:
     seen_pmids = set()
     supporting: List[Dict] = []
     trail: List[Dict] = []
+    verifiers_seen: set[str] = set()
+    n_articles_verified = 0
 
     for i in range(config.MAX_ITERATIONS):
         query = escalated_query(claim, condition, i)
@@ -253,7 +273,34 @@ def evidence_loop(claim: str, condition: str) -> Dict:
         for a in new_articles:
             seen_pmids.add(a["pmid"])
 
-        verdicts = [verify_claim_against_article(claim, a) for a in new_articles]
+        # Cap LLM verify spend per claim (NIM Ultra/Super are slow).
+        remaining = max(
+            0,
+            int(getattr(config, "MAX_ARTICLES_VERIFIED_PER_CLAIM", 8))
+            - n_articles_verified,
+        )
+        if remaining <= 0:
+            trail.append({
+                "iteration": i,
+                "query": query,
+                "retrieved": [a["pmid"] for a in new_articles],
+                "supported_pmids": [],
+                "verified_by": [],
+                "n_verified": 0,
+                "verify_cap_reached": True,
+            })
+            break
+        to_verify = new_articles[:remaining]
+
+        verdicts = [verify_claim_against_article(claim, a) for a in to_verify]
+        n_articles_verified += len(verdicts)
+        for v in verdicts:
+            vb = v.get("verified_by")
+            if vb:
+                verifiers_seen.add(str(vb))
+            vp = v.get("verifier_path") or v.get("verifier_provider")
+            if vp:
+                verifiers_seen.add(str(vp))
         hits = [v for v in verdicts
                 if v.get("supported")
                 and config.EVIDENCE_RANK.get(v.get("evidence_level", "unknown"), 0) >= config.MIN_EVIDENCE_LEVEL]
@@ -264,12 +311,31 @@ def evidence_loop(claim: str, condition: str) -> Dict:
             "query": query,
             "retrieved": [a["pmid"] for a in new_articles],
             "supported_pmids": [v["pmid"] for v in hits],
+            "verified_by": sorted({
+                str(v.get("verified_by")) for v in verdicts if v.get("verified_by")
+            }),
+            "n_verified": len(verdicts),
         })
 
         if len(supporting) >= config.MIN_SUPPORTING_ARTICLES:
-            return {"claim": claim, "status": "supported",
-                    "evidence": supporting, "iterations_used": i + 1, "trail": trail}
+            return {
+                "claim": claim,
+                "status": "supported",
+                "evidence": supporting,
+                "iterations_used": i + 1,
+                "trail": trail,
+                "verifiers_seen": sorted(verifiers_seen),
+                "n_articles_verified": n_articles_verified,
+                "retrieved_pmids": sorted(seen_pmids),
+            }
 
-    return {"claim": claim, "status": "insufficient_evidence",
-            "evidence": supporting, "iterations_used": config.MAX_ITERATIONS,
-            "trail": trail}
+    return {
+        "claim": claim,
+        "status": "insufficient_evidence",
+        "evidence": supporting,
+        "iterations_used": len(trail) or config.MAX_ITERATIONS,
+        "trail": trail,
+        "verifiers_seen": sorted(verifiers_seen),
+        "n_articles_verified": n_articles_verified,
+        "retrieved_pmids": sorted(seen_pmids),
+    }
