@@ -63,7 +63,7 @@
     <button id="go">Analyze</button>
   </div>
   <div class="chips" id="chips"></div>
-  <div class="note">Each query is an async job (PubMed + verification). This page polls <b>its own</b> job progress — expect <b>30–90 seconds</b>.</div>
+  <div class="note">Live path each query (interpret LLM → propose or curated → PubMed + verify). Expect <b>30–90+ seconds</b>. Example chips often hit the curated formulary (still runs LLM verify); type a <b>novel</b> symptom to force AI propose. Soft-refresh (⌘⇧R) after server restarts.</div>
 
   <div id="out"></div>
   <p class="disc" id="disc"></p>
@@ -190,7 +190,18 @@ function render(res){
     h+=`<span class="badge b-amber">Insufficient evidence</span>
         <div class="meta" style="margin-top:.7rem">${esc(res.note||'No substantiated recommendation could be produced.')}</div>`;
   }
-  h+=`<div class="models">Generator: ${esc(m.generator)} · Verifier: ${esc(m.verifier)} · <b>${indep}</b></div></div>`;
+  h+=`<div class="models">Generator: ${esc(m.generator)} · Verifier: ${esc(m.verifier)} · <b>${indep}</b>`;
+  const lp=res.live_path||{};
+  if(lp.mode){
+    h+=`<br>Live: interpret_llm=${lp.interpret_llm?'yes':'no'}`+
+       ` · source=${esc(lp.candidate_source||res.source||'?')}`+
+       ` · propose_ran=${lp.propose_ran?'yes':'no'}`+
+       ` · pubmed_iters=${esc(String(lp.pubmed_evidence_iterations??'—'))}`+
+       ` · supporting_pmids=${esc(String(lp.n_supporting_pmids??res.n_citations??0))}`+
+       (lp.verified_by&&lp.verified_by.length?` · verified_by=${esc(lp.verified_by.join(','))}`:'')+
+       (lp.degraded?' · <b style="color:var(--amber)">degraded</b>':'');
+  }
+  h+=`</div></div>`;
   out.innerHTML=h;
   disc.textContent=res.disclaimer||'';
 }

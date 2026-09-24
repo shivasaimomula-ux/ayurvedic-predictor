@@ -65,6 +65,53 @@ class TestStageAApprovedStack(unittest.TestCase):
         self.assertIsInstance(c["ayurvedic_frame"], str)
         self.assertIn("Kapha", c["ayurvedic_frame"])
 
+    def test_force_ai_propose_skips_curated(self):
+        from predictor import pipeline
+
+        with mock.patch.object(config, "FORCE_AI_PROPOSE", True), mock.patch.object(
+            config, "llm_available", return_value=True
+        ), mock.patch(
+            "predictor.agents.interpret",
+            return_value={
+                "normalized_condition": "novel zypherian malaise",
+                "modern_targets": [],
+                "ayurvedic_frame": None,
+                "_llm": True,
+            },
+        ), mock.patch(
+            "predictor.agents.propose_candidate",
+            return_value={
+                "formula": "Test Formula",
+                "type": "ai_proposed",
+                "formulation": "Churna",
+                "delivery": "Oral",
+                "ayurvedic_frame": "Vata",
+                "herbs": ["Ashwagandha (Withania somnifera)"],
+                "phytochemicals": ["withanolides"],
+                "claims": [
+                    "Withania somnifera has adaptogenic activity relevant to stress"
+                ],
+            },
+        ), mock.patch(
+            "predictor.agents.evidence_loop",
+            return_value={
+                "claim": "x",
+                "status": "insufficient_evidence",
+                "evidence": [],
+                "iterations_used": 2,
+                "trail": [],
+            },
+        ), mock.patch(
+            "predictor.knowledge_graph.generate_candidates"
+        ) as kg:
+            out = pipeline.predict("unique zypherian malaise qx924live")
+        kg.assert_not_called()
+        self.assertEqual(out["source"], "ai_proposed")
+        self.assertEqual(out["live_path"]["mode"], "live")
+        self.assertTrue(out["live_path"]["propose_ran"])
+        self.assertTrue(out["live_path"]["skipped_curated"])
+        self.assertTrue(out["live_path"]["interpret_llm"])
+
 
 if __name__ == "__main__":
     unittest.main()

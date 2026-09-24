@@ -81,6 +81,13 @@ PREDICT_JOB_TIMEOUT_S = float(os.getenv("PREDICT_JOB_TIMEOUT_S", "540"))
 PREDICT_MAX_CONCURRENT_JOBS = int(os.getenv("PREDICT_MAX_CONCURRENT_JOBS", "2"))
 PREDICT_JOB_RETENTION_S = float(os.getenv("PREDICT_JOB_RETENTION_S", "3600"))
 
+# Volume path is always live (no fixture/mock predict cache). Optional:
+# skip curated KG so every query runs generator propose + PubMed verify.
+# PubMed PMID disk cache remains OK for rate limits — it does not skip LLMs.
+FORCE_AI_PROPOSE = os.getenv("A_FORCE_AI_PROPOSE", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
 # Higher = stronger evidence. Used to grade and to decide sufficiency.
 EVIDENCE_RANK = {
     "rct": 5,

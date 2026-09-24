@@ -28,3 +28,4 @@ node_modules/
 # Finder duplicate junk (Finding #22)
 * 2.py
 * 2.*
+cache/

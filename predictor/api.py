@@ -122,7 +122,10 @@ def health():
             "contracts": "herbenzo-contracts",
             "async_jobs": True,
             "predict_job_timeout_s": config.PREDICT_JOB_TIMEOUT_S,
-            "predict_max_concurrent_jobs": config.PREDICT_MAX_CONCURRENT_JOBS}
+            "predict_max_concurrent_jobs": config.PREDICT_MAX_CONCURRENT_JOBS,
+            "volume_mode": "live",
+            "force_ai_propose": config.FORCE_AI_PROPOSE,
+            "predict_response_cache": False}
 
 
 @app.post("/predict")
