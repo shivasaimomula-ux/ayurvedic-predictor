@@ -59,9 +59,10 @@ def _article_payload(article: Dict[str, Any]) -> dict[str, Any]:
 def model_for_provider(provider: str) -> str:
     """Map a cost-order provider name to a concrete model id."""
     if provider == "nim":
-        return f"nim/{config.NIM_MODEL}"
+        if llm.is_nim_model(config.VERIFIER_MODEL):
+            return config.VERIFIER_MODEL
+        return config.NIM_MODEL
     if provider == "gemini":
-        # Prefer configured VERIFIER_MODEL when it is Gemini; else a strong default.
         if not llm.is_claude_model(config.VERIFIER_MODEL) and not llm.is_nim_model(
             config.VERIFIER_MODEL
         ):
@@ -181,10 +182,10 @@ def _local_cascade(
         second is not None
         and bool(second.get("supported")) != bool(first.get("supported"))
     )
-    needs_claude = force_hard_reject or disagree
+    needs_escalate = force_hard_reject or disagree
 
-    if not needs_claude:
-        # Both reject / only one cheap rejects — accept unsupported without Claude.
+    if not needs_escalate:
+        # Both reject / only one cheap rejects — accept unsupported without escalate.
         if second is not None and second.get("supported"):
             return {**second, "verifier_path": f"{cheap[0]}+{cheap[1]}"}
         out = first
@@ -199,34 +200,57 @@ def _local_cascade(
             }
         return out
 
-    # Escalate: Claude only on disagreement / hard-reject.
-    if not config.claude_usable():
-        # Fail closed to unsupported when escalate needed but Claude missing.
-        base = first if not (second and second.get("supported")) else second
+    # Escalate: Claude only when A_CLAUDE_ESCALATE=1; else Nemotron Super / NIM fallback.
+    use_claude = (
+        getattr(config, "ESCALATE_MODEL", "").lower().startswith("claude")
+        and config.claude_usable()
+    )
+    if use_claude:
+        escalated = _call_model(
+            provider="claude", claim=claim, article=article, complete_json=complete_json
+        )
+        prior = f"{cheap[0]}" + (f"+{cheap[1]}" if second is not None else "")
         return {
-            **base,
-            "supported": False if force_hard_reject else bool(base.get("supported")),
-            "escalated": False,
-            "verifier_path": f"{base.get('verifier_path', cheap[0])}+claude_unavailable",
-            "reason": (
-                f"{base.get('reason', '')} "
-                "(Claude escalate needed but ANTHROPIC_API_KEY unset)"
-            ).strip(),
+            **escalated,
+            "escalated": True,
+            "verifier_path": f"{prior}->claude",
+            "verifier_fallback": False,
+            "prior_verdicts": {
+                cheap[0]: first.get("supported"),
+                **({cheap[1]: second.get("supported")} if second is not None else {}),
+            },
         }
 
-    escalated = _call_model(
-        provider="claude", claim=claim, article=article, complete_json=complete_json
-    )
-    prior = f"{cheap[0]}" + (f"+{cheap[1]}" if second is not None else "")
+    # Stage A default: re-check with NIM Super (or configured ESCALATE_MODEL) — no Claude.
+    esc_model = config.ESCALATE_MODEL or config.NIM_MODEL_FALLBACK
+    if config.nim_usable() and (
+        llm.is_nim_model(esc_model) or esc_model == config.NIM_MODEL_FALLBACK
+    ):
+        try:
+            raw = complete_json(
+                _prompt(claim, article),
+                esc_model if llm.is_nim_model(esc_model) else f"nim/{esc_model}",
+                system=_VERIFY_SYS,
+            )
+            prior = f"{cheap[0]}" + (f"+{cheap[1]}" if second is not None else "")
+            return {
+                **_normalize_local(raw, model=esc_model, provider="nim"),
+                "escalated": True,
+                "verifier_path": f"{prior}->nim_escalate",
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+    base = first if not (second and second.get("supported")) else second
     return {
-        **escalated,
-        "escalated": True,
-        "verifier_path": f"{prior}->claude",
-        "verifier_fallback": False,
-        "prior_verdicts": {
-            cheap[0]: first.get("supported"),
-            **({cheap[1]: second.get("supported")} if second is not None else {}),
-        },
+        **base,
+        "supported": False if force_hard_reject else bool(base.get("supported")),
+        "escalated": False,
+        "verifier_path": f"{base.get('verifier_path', cheap[0])}+escalate_unavailable",
+        "reason": (
+            f"{base.get('reason', '')} "
+            "(escalate needed but Claude disabled / NIM escalate failed)"
+        ).strip(),
     }
 
 

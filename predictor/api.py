@@ -95,12 +95,11 @@ def health():
 
     verifier = claim_verifier.describe_verifier_config()
     adjudication_reachable = False
-    if config.ADJUDICATION_PREFERRED:
-        try:
-            from .adjudication_client import AdjudicationClient
-            adjudication_reachable = AdjudicationClient().is_reachable()
-        except Exception:  # noqa: BLE001
-            adjudication_reachable = False
+    try:
+        from .adjudication_client import AdjudicationClient
+        adjudication_reachable = AdjudicationClient().is_reachable()
+    except Exception:  # noqa: BLE001
+        adjudication_reachable = False
     return {"status": "ok", "llm_available": config.llm_available(),
             "generator": config.GENERATOR_MODEL, "verifier": config.VERIFIER_MODEL,
             "escalate_model": config.ESCALATE_MODEL,
@@ -122,7 +121,10 @@ def health():
             "contracts": "herbenzo-contracts",
             "async_jobs": True,
             "predict_job_timeout_s": config.PREDICT_JOB_TIMEOUT_S,
-            "predict_max_concurrent_jobs": config.PREDICT_MAX_CONCURRENT_JOBS}
+            "predict_max_concurrent_jobs": config.PREDICT_MAX_CONCURRENT_JOBS,
+            "volume_mode": "live",
+            "force_ai_propose": config.FORCE_AI_PROPOSE,
+            "predict_response_cache": False}
 
 
 @app.post("/predict")

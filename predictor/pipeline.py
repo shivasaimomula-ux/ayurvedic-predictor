@@ -82,14 +82,23 @@ def predict(
 
     # --- Stage 2 ------------------------------------------------------------
     _progress(on_progress, "candidates", 15, "Generating candidates…")
-    cand = knowledge_graph.generate_candidates(user_input)
+    # Live volume path: never serve fixture/mock predict results. Optional
+    # A_FORCE_AI_PROPOSE=1 skips curated KG so propose LLM always runs.
+    if config.FORCE_AI_PROPOSE:
+        cand = {"condition_key": None, "ayurvedic_frame": None, "candidates": []}
+        skipped_curated = True
+    else:
+        cand = knowledge_graph.generate_candidates(user_input)
+        skipped_curated = False
     source = "curated"
+    propose_ran = False
 
     # Open fallback: if the curated KG has no match, let the generator propose a
     # candidate. Its claims are STILL verified below, so this widens coverage to
     # any symptom without weakening the no-fabrication guarantee.
     if not cand["candidates"]:
         proposed = agents.propose_candidate(user_input, interp)
+        propose_ran = True
         if proposed:
             cand = {"condition_key": None,
                     "ayurvedic_frame": proposed.get("ayurvedic_frame"),
@@ -97,13 +106,16 @@ def predict(
             source = "ai_proposed"
 
     log("candidate_generation", condition_key=cand["condition_key"],
-        source=source, n_candidates=len(cand["candidates"]))
+        source=source, n_candidates=len(cand["candidates"]),
+        force_ai_propose=bool(config.FORCE_AI_PROPOSE),
+        skipped_curated=skipped_curated, propose_ran=propose_ran)
 
     if not cand["candidates"]:
         _progress(on_progress, "done", 100, "No candidates")
         return _envelope(user_input, interp, "insufficient_evidence", None, [],
                          audit, source=source, f_intake=intake,
-                         note="Could not generate any candidate formulation for this input.")
+                         note="Could not generate any candidate formulation for this input.",
+                         propose_ran=propose_ran, skipped_curated=skipped_curated)
 
     # MVP: evaluate the top candidate. (Extend to rank multiple candidates.)
     candidate = cand["candidates"][0]
@@ -124,7 +136,10 @@ def predict(
         claim_results.append(res)
         log("evidence_loop", claim=claim, status=res["status"],
             iterations=res["iterations_used"],
-            supporting=[e["pmid"] for e in res["evidence"]])
+            supporting=[e["pmid"] for e in res["evidence"]],
+            verifiers_seen=res.get("verifiers_seen") or [],
+            n_articles_verified=res.get("n_articles_verified") or 0,
+            retrieved_pmids=(res.get("retrieved_pmids") or [])[:20])
 
     supported = [c for c in claim_results if c["status"] == "supported"]
     all_evidence = [e for c in claim_results for e in c["evidence"]]
@@ -145,14 +160,16 @@ def predict(
         _progress(on_progress, "done", 100, "Insufficient evidence")
         return _envelope(user_input, interp, "insufficient_evidence", candidate,
                          all_evidence, audit, source=source, f_intake=intake,
-                         note="No candidate claim could be substantiated with graded PubMed evidence.")
+                         note="No candidate claim could be substantiated with graded PubMed evidence.",
+                         propose_ran=propose_ran, skipped_curated=skipped_curated)
 
     outcome = {
         "formula": candidate["formula"],
         "formulation": candidate["formulation"],
         "delivery_system": candidate["delivery"],
         "herbs": candidate["herbs"],
-        "ayurvedic_frame": cand["ayurvedic_frame"],
+        "ayurvedic_frame": agents._frame_to_str(cand.get("ayurvedic_frame"))
+            or agents._frame_to_str(candidate.get("ayurvedic_frame")),
         "source": source,
         "ai_proposed": source == "ai_proposed",
         "substantiated_claims": [
@@ -197,13 +214,81 @@ def predict(
                      audit, outcome=outcome, source=source, f_intake=intake,
                      formulation_input=formulation_input,
                      formulation_spec=formulation_spec,
-                     formulation_spec_error=formulation_spec_error)
+                     formulation_spec_error=formulation_spec_error,
+                     propose_ran=propose_ran, skipped_curated=skipped_curated)
+
+
+def _live_path_summary(
+    interp: Dict,
+    source: str,
+    evidence: List[Dict],
+    audit: List[Dict],
+    *,
+    propose_ran: bool,
+    skipped_curated: bool,
+) -> Dict[str, Any]:
+    """Operator-facing proof that this response was not a fixture replay."""
+    interpret_llm = bool(interp.get("_llm")) if isinstance(interp, dict) else False
+    interpret_model = None
+    if isinstance(interp, dict) and interp.get("_interpret_model"):
+        interpret_model = str(interp.get("_interpret_model"))
+    verified_by = {
+        str(e.get("verified_by"))
+        for e in evidence
+        if e.get("verified_by")
+    }
+    pubmed_iterations = 0
+    pubmed_retrieved = 0
+    n_articles_verified = 0
+    for ev in audit:
+        if ev.get("stage") != "evidence_loop":
+            continue
+        pubmed_retrieved += len(ev.get("supporting") or [])
+        pubmed_retrieved += len(ev.get("retrieved_pmids") or [])
+        pubmed_iterations += int(ev.get("iterations") or 0)
+        n_articles_verified += int(ev.get("n_articles_verified") or 0)
+        for vb in ev.get("verifiers_seen") or []:
+            if vb:
+                verified_by.add(str(vb))
+    # Drop non-model path labels that are not verifier identities.
+    verified_by_list = sorted(
+        v for v in verified_by
+        if v and v not in {"None", "none"}
+    )
+    degraded = (not interpret_llm) or (
+        source == "ai_proposed" and not propose_ran
+    )
+    return {
+        "mode": "live",
+        "interpret_llm": interpret_llm,
+        "interpret_model": interpret_model,
+        "candidate_source": source,
+        "propose_ran": propose_ran,
+        "force_ai_propose": bool(config.FORCE_AI_PROPOSE),
+        "skipped_curated": skipped_curated,
+        "pubmed_evidence_iterations": pubmed_iterations,
+        "n_supporting_pmids": len({e.get("pmid") for e in evidence if e.get("pmid")}),
+        "n_articles_verified": n_articles_verified,
+        "n_pmids_retrieved": len({
+            pmid
+            for ev in audit
+            if ev.get("stage") == "evidence_loop"
+            for pmid in (ev.get("retrieved_pmids") or [])
+        }),
+        "verified_by": verified_by_list,
+        "degraded": degraded,
+        "note": (
+            "PubMed PMID disk cache may speed retrieval; LLMs still run. "
+            "No predict-job response fixture cache on the volume path."
+        ),
+    }
 
 
 def _envelope(user_input, interp, status, candidate, evidence, audit,
               outcome=None, note=None, source="curated",
               f_intake=None, formulation_input=None,
-              formulation_spec=None, formulation_spec_error=None) -> Dict:
+              formulation_spec=None, formulation_spec_error=None,
+              propose_ran: bool = False, skipped_curated: bool = False) -> Dict:
     f_intake = f_intake or {}
     # Refuse → never invent a FormulationInput for C or FormulationSpec for B.
     if status != "recommendation":
@@ -217,6 +302,17 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
         from . import formulation_export as _fe
 
         thread = _fe.build_provenance_thread(f_intake)
+    # Early-return paths (no candidates) never set propose_ran locals — infer.
+    if not propose_ran:
+        for ev in audit:
+            if ev.get("stage") == "candidate_generation" and ev.get("propose_ran"):
+                propose_ran = True
+                skipped_curated = bool(ev.get("skipped_curated"))
+                break
+    live_path = _live_path_summary(
+        interp, source, evidence, audit,
+        propose_ran=propose_ran, skipped_curated=skipped_curated,
+    )
     return {
         "input": user_input,
         "interpretation": interp,
@@ -247,6 +343,7 @@ def _envelope(user_input, interp, status, candidate, evidence, audit,
             "cross_model": config.is_cross_model(),
             "cross_provider": config.is_cross_provider(),
         },
+        "live_path": live_path,
         "disclaimer": config.DISCLAIMER,
         "audit_trail": audit,
     }

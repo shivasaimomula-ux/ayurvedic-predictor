@@ -76,40 +76,97 @@ def complete(prompt: str, model: str, json_mode: bool = False,
     if is_nim_model(model):
         if not config.NVIDIA_API_KEY:
             raise RuntimeError("NVIDIA_API_KEY not set but a NIM model was requested.")
-        nim_model = resolve_nim_model(model)
-        payload = {
-            "model": nim_model,
-            "messages": [
-                {"role": "system", "content": system or ""},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 2048,
-        }
-        resp = requests.post(
-            f"{config.NIM_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {config.NVIDIA_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=60,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        return body["choices"][0]["message"]["content"] or ""
+        nim_candidates: list[str] = []
+        for m in (
+            resolve_nim_model(model),
+            getattr(config, "NIM_MODEL", None),
+            getattr(config, "NIM_MODEL_FALLBACK", None),
+        ):
+            if m and m not in nim_candidates:
+                nim_candidates.append(m)
+        last_err: Exception | None = None
+        for nim_model in nim_candidates:
+            payload = {
+                "model": nim_model,
+                "messages": [
+                    {"role": "system", "content": system or ""},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048,
+            }
+            try:
+                resp = requests.post(
+                    f"{config.NIM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {config.NVIDIA_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=45,
+                )
+                if resp.status_code in {404, 410, 503}:
+                    last_err = requests.HTTPError(
+                        f"{resp.status_code} for NIM model {nim_model}",
+                        response=resp,
+                    )
+                    continue
+                resp.raise_for_status()
+                body = resp.json()
+                return body["choices"][0]["message"]["content"] or ""
+            except requests.HTTPError as e:
+                last_err = e
+                code = getattr(e.response, "status_code", None)
+                if code in {404, 410, 503}:
+                    continue
+                raise
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                msg = str(e).lower()
+                if any(s in msg for s in ("404", "410", "503", "not found", "unavailable")):
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        return ""
 
-    # Gemini path
+    # Gemini path (with Flash 3.x → 2.5 fallbacks)
     if not config.GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set.")
     from google.genai import types
-    cfg = types.GenerateContentConfig(
-        system_instruction=system,
-        response_mime_type="application/json" if json_mode else "text/plain",
-        temperature=0.2,
-    )
-    resp = _gemini().models.generate_content(model=model, contents=prompt, config=cfg)
-    return resp.text or ""
+
+    candidates: list[str] = []
+    for m in (model, *getattr(config, "GENERATOR_MODEL_FALLBACKS", ())):
+        if m and m not in candidates and not is_claude_model(m) and not is_nim_model(m):
+            candidates.append(m)
+    if not candidates:
+        candidates = [model]
+
+    last_err: Exception | None = None
+    for mid in candidates:
+        cfg = types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json" if json_mode else "text/plain",
+            temperature=0.2,
+        )
+        try:
+            resp = _gemini().models.generate_content(
+                model=mid, contents=prompt, config=cfg
+            )
+            return resp.text or ""
+        except Exception as e:  # noqa: BLE001 — try next Flash id
+            last_err = e
+            msg = str(e).lower()
+            # Only fall through on model-not-found / invalid argument; else raise.
+            if not any(
+                s in msg
+                for s in ("not found", "not supported", "invalid", "404", "unknown model")
+            ):
+                raise
+            continue
+    if last_err:
+        raise last_err
+    return ""
 
 
 def complete_json(prompt: str, model: str, system: Optional[str] = None) -> dict:

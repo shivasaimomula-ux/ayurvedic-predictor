@@ -16,48 +16,84 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY") or os.getenv("NIM_API_KEY")
 NIM_BASE_URL = (
     os.getenv("NIM_BASE_URL") or "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
-NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.1-70b-instruct")
+# Stage A (approved 2026-09-24): verifier = Nemotron 3 Ultra on NIM
+# (cross-provider vs Gemini). Legacy llama-3.1-nemotron-ultra-253b-v1 404s on
+# many keys; Super is fallback when Ultra is unavailable.
+NIM_MODEL = os.getenv(
+    "NIM_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
+)
+NIM_MODEL_FALLBACK = os.getenv(
+    "NIM_MODEL_FALLBACK", "nvidia/nemotron-3-super-120b-a12b"
+)
 
-# Cost order (Audit Finding #11): NVIDIA (NIM) > Gemini > Claude.
-# Claude is escalate-only (disagreement / hard-reject), never the default volume path.
-VERIFIER_COST_ORDER = ("nim", "gemini", "claude")
+# Stage A volume path: NVIDIA NIM → Gemini. Claude is OFF by default for this
+# recommend-UI version (cross-provider = Gemini generate + NIM verify).
+VERIFIER_COST_ORDER = ("nim", "gemini")
 
-# Generator and cheap verifier are deliberately separable (reduces correlated
-# hallucination). Defaults:
-#   - generator: gemini-2.5-flash (fast)
-#   - cheap verifier: gemini-2.5-pro (stronger Gemini — NOT Claude)
-#   - escalate: Claude only when cheap providers disagree or hard-reject is forced
-GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemini-2.5-flash")
-_raw_verifier = os.getenv("VERIFIER_MODEL", "gemini-2.5-pro")
-# Cost guardrail: Claude must never be the volume verifier. If an old .env still
-# sets VERIFIER_MODEL=claude-*, coerce to Gemini and keep Claude as escalate.
+# Generator and verifier are different providers (anti-hallucination):
+#   - generator: Gemini Flash 3.5 / 3.8 (falls back to 2.5 Flash if needed)
+#   - verifier:  Nemotron 3 Ultra on NIM
+GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemini-3.5-flash")
+# Prefer Flash 3.x; llm.complete() walks this list on Gemini 404/not-found.
+GENERATOR_MODEL_FALLBACKS = tuple(
+    m.strip()
+    for m in os.getenv(
+        "GENERATOR_MODEL_FALLBACKS",
+        "gemini-3.8-flash,gemini-3.5-flash,gemini-2.5-flash,gemini-2.0-flash",
+    ).split(",")
+    if m.strip()
+)
+
+_raw_verifier = os.getenv("VERIFIER_MODEL", NIM_MODEL)
+# Claude must never be the volume verifier on Stage A.
 if _raw_verifier.lower().startswith("claude"):
-    VERIFIER_MODEL = "gemini-2.5-pro"
-    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", _raw_verifier)
+    VERIFIER_MODEL = NIM_MODEL
 else:
     VERIFIER_MODEL = _raw_verifier
-    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", "claude-sonnet-4-6")
 
-# Prefer blue adjudication service (:8011) when reachable; else local cascade.
+# Claude escalate disabled unless explicitly opted in (A_CLAUDE_ESCALATE=1).
+_claude_escalate = os.getenv("A_CLAUDE_ESCALATE", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+if _claude_escalate:
+    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", "claude-sonnet-4-6")
+else:
+    # Re-verify with Super / same NIM stack — never Claude for this version.
+    ESCALATE_MODEL = os.getenv("ESCALATE_MODEL", NIM_MODEL_FALLBACK)
+
+# Blue adjudication (:8011) is optional. Default OFF for Stage A volume so
+# claim verify uses the local NIM Ultra / Gemini LLM cascade — Adj's first
+# path is lexical and reads as a "demo" short-circuit. Set
+# ADJUDICATION_PREFERRED=1 to prefer blue when reachable.
 ADJUDICATION_URL = (
     os.getenv("ADJUDICATION_URL") or "http://127.0.0.1:8011"
 ).rstrip("/")
-ADJUDICATION_PREFERRED = os.getenv("ADJUDICATION_PREFERRED", "1").strip().lower() in {
+ADJUDICATION_PREFERRED = os.getenv("ADJUDICATION_PREFERRED", "0").strip().lower() in {
     "1", "true", "yes", "on",
 }
 ADJUDICATION_TIMEOUT_S = float(os.getenv("ADJUDICATION_TIMEOUT_S", "8"))
 
 # --- Evidence loop -----------------------------------------------------------
-MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "12"))   # 10-15 per the design
-ARTICLES_PER_QUERY = int(os.getenv("ARTICLES_PER_QUERY", "5"))
+MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "6"))   # volume default; was 12
+ARTICLES_PER_QUERY = int(os.getenv("ARTICLES_PER_QUERY", "3"))
+# Hard cap on LLM verify calls per claim (prevents 9+ minute hangs on Super/Ultra).
+MAX_ARTICLES_VERIFIED_PER_CLAIM = int(os.getenv("MAX_ARTICLES_VERIFIED_PER_CLAIM", "8"))
 MIN_SUPPORTING_ARTICLES = int(os.getenv("MIN_SUPPORTING_ARTICLES", "1"))
 MIN_EVIDENCE_LEVEL = int(os.getenv("MIN_EVIDENCE_LEVEL", "2"))  # see EVIDENCE_RANK
 
 # --- Async predict jobs (Task T18 / Finding #20) ------------------------------
-# Wall-clock budget for a single job (default 9 min; under F's 600s handoff).
-PREDICT_JOB_TIMEOUT_S = float(os.getenv("PREDICT_JOB_TIMEOUT_S", "540"))
+# Wall-clock budget for a single job (default 15 min; LLM verify is slow).
+PREDICT_JOB_TIMEOUT_S = float(os.getenv("PREDICT_JOB_TIMEOUT_S", "900"))
 PREDICT_MAX_CONCURRENT_JOBS = int(os.getenv("PREDICT_MAX_CONCURRENT_JOBS", "2"))
 PREDICT_JOB_RETENTION_S = float(os.getenv("PREDICT_JOB_RETENTION_S", "3600"))
+
+# Volume path is always live (no fixture/mock predict cache). Default ON:
+# skip curated KG so every Analyze (including chips) runs generator propose
+# + PubMed + LLM verify. Set A_FORCE_AI_PROPOSE=0 to allow curated KG hits.
+# PubMed PMID disk cache remains OK for rate limits — it does not skip LLMs.
+FORCE_AI_PROPOSE = os.getenv("A_FORCE_AI_PROPOSE", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Higher = stronger evidence. Used to grade and to decide sufficiency.
 EVIDENCE_RANK = {

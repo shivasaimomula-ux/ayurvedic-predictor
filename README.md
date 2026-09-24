@@ -61,16 +61,21 @@ A query takes ~30–90 s (live literature search + per-claim verification).
 ## Configuration (.env)
 Copy `.env.example` → `.env` (never commit secrets).
 
-**Verifier cost order (Task T15 / Finding #11):** `NVIDIA (NIM) > Gemini > Claude`
+**Verifier cost order (Task T15 / Finding #11):** `NVIDIA (NIM) > Gemini` (Claude escalate opt-in)
 
-1. Prefer blue adjudication on `:8011` when `ADJUDICATION_PREFERRED=1` and reachable.
-2. Else local cheap path: NIM (if `NVIDIA_API_KEY`) → Gemini (`VERIFIER_MODEL`, default `gemini-2.5-pro`).
-3. Claude (`ESCALATE_MODEL`) **only** on cheap-provider disagreement or forced hard-reject — never the default volume verifier.
+1. **Default volume path:** local LLM verify (NIM Ultra → Gemini). Blue Adj on
+   `:8011` is off by default (`ADJUDICATION_PREFERRED=0`) because Adj's first
+   path is lexical and skips the LLM verifier.
+2. Set `ADJUDICATION_PREFERRED=1` to prefer blue when reachable; else same local cascade.
+3. Claude (`ESCALATE_MODEL`) only when `A_CLAUDE_ESCALATE=1` — never the default volume verifier.
+4. `A_FORCE_AI_PROPOSE=1` (default) skips curated KG so chips and novel queries both run propose LLM.
 
 | Var | Role |
 |-----|------|
 | `GEMINI_API_KEY` | Generator + cheap Gemini verifier |
-| `NVIDIA_API_KEY` | Optional NIM cheap verifier (preferred when set) |
+| `NVIDIA_API_KEY` | NIM Ultra verifier (preferred when set) |
+| `A_FORCE_AI_PROPOSE` | Default `1` — always run propose LLM |
+| `ADJUDICATION_PREFERRED` | Default `0` — local LLM verify (set `1` for blue Adj) |
 | `ANTHROPIC_API_KEY` | Optional Claude escalate only |
 | `ADJUDICATION_URL` | Blue service (default `http://127.0.0.1:8011`) |
 | `HERBENZO_PUBMED_CACHE_DIR` | Shared PMID disk cache with B / adjudication (Task T16) |

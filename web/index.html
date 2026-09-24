@@ -63,7 +63,7 @@
     <button id="go">Analyze</button>
   </div>
   <div class="chips" id="chips"></div>
-  <div class="note">Each query is an async job (PubMed + verification). This page polls <b>its own</b> job progress — expect <b>30–90 seconds</b>.</div>
+  <div class="note">Full live pipeline every query: interpret LLM → AI propose → PubMed search → LLM verify (NIM Ultra / Gemini). Expect <b>20–90+ seconds</b>. Soft-refresh (⌘⇧R) after server restarts.</div>
 
   <div id="out"></div>
   <p class="disc" id="disc"></p>
@@ -80,7 +80,30 @@ const out=document.getElementById('out'), disc=document.getElementById('disc'),
       btn=document.getElementById('go'), q=document.getElementById('q');
 btn.onclick=run; q.addEventListener('keydown',e=>{if(e.key==='Enter')run();});
 
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function frameText(v){
+  if(v==null||v==='') return '—';
+  if(typeof v==='string') return v;
+  if(typeof v==='object'){
+    try{
+      if(Array.isArray(v)) return v.map(String).filter(Boolean).join('; ')||'—';
+      return Object.entries(v).map(([k,val])=>{
+        if(val==null||val==='') return '';
+        return Array.isArray(val)?`${k}: ${val.join(', ')}`:`${k}: ${val}`;
+      }).filter(Boolean).join('; ')||'—';
+    }catch(_){ return '—'; }
+  }
+  return String(v);
+}
+function errText(v){
+  if(v==null||v==='') return '';
+  if(typeof v==='string') return v;
+  if(typeof v==='object'){
+    if(v.message) return String(v.message);
+    try{ return JSON.stringify(v); }catch(_){ return '[error]'; }
+  }
+  return String(v);
+}
+function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
 async function run(){
   const query=q.value.trim(); if(!query)return;
@@ -119,16 +142,16 @@ function render(res){
   let h='<div class="card">';
   const aiBadge = res.source==='ai_proposed'
     ? '<span class="badge b-amber">AI-proposed</span>'
-    : '<span class="badge b-grey">curated formulary</span>';
+    : '<span class="badge b-grey">knowledge graph</span>';
   if(res.status==='recommendation'){
     const o=res.outcome;
     h+=`<span class="badge b-green">Recommendation</span> ${aiBadge}
         <span class="badge b-grey">${res.n_citations} citations</span>
         <div class="rx">${esc(o.formula)}</div>`;
-    if(o.ai_proposed) h+=`<div class="meta" style="color:var(--amber)">Proposed by the model (not from the curated classical formulary) — every claim below was still verified against PubMed.</div>`;
+    if(o.ai_proposed) h+=`<div class="meta" style="color:var(--amber)">Generator-proposed candidate — every claim below was verified against PubMed by the LLM verifier.</div>`;
     h+=`<div class="meta">Formulation: ${esc(o.formulation)}</div>
         <div class="meta">Delivery: ${esc(o.delivery_system)}</div>
-        <div class="meta">Ayurvedic frame: ${esc(o.ayurvedic_frame||'—')}</div>
+        <div class="meta">Ayurvedic frame: ${esc(frameText(o.ayurvedic_frame))}</div>
         <div class="meta">Overall evidence grade: <b>${esc(o.overall_evidence_grade)}</b></div>`;
     const pt=res.provenance_thread||(res.f_context&&res.f_context.provenance_thread)||{};
     const spec=res.formulation_spec;
@@ -148,7 +171,7 @@ function render(res){
        ` · identity_source=${esc(idSrc)}`+
        ` · stages=[${esc(String(stages))}]`+
        (chain?`<br>Provenance: ${esc(chain)}`:'')+
-       (res.formulation_spec_error?`<br>formulation_spec_error: ${esc(String(res.formulation_spec_error))}`:'')+
+       (res.formulation_spec_error?`<br>formulation_spec_error: ${esc(errText(res.formulation_spec_error))}`:'')+
        `</div>`;
     o.substantiated_claims.forEach(c=>{
       h+=`<div class="claim"><div class="t">${esc(c.claim)}<span class="lvl">${esc(c.evidence_grade)}</span></div>`;
@@ -167,7 +190,21 @@ function render(res){
     h+=`<span class="badge b-amber">Insufficient evidence</span>
         <div class="meta" style="margin-top:.7rem">${esc(res.note||'No substantiated recommendation could be produced.')}</div>`;
   }
-  h+=`<div class="models">Generator: ${esc(m.generator)} · Verifier: ${esc(m.verifier)} · <b>${indep}</b></div></div>`;
+  h+=`<div class="models">Generator: ${esc(m.generator)} · Verifier: ${esc(m.verifier)} · <b>${indep}</b>`;
+  const lp=res.live_path||{};
+  if(lp.mode){
+    h+=`<br>Live: interpret_llm=${lp.interpret_llm?'yes':'no'}`+
+       (lp.interpret_model?` (${esc(lp.interpret_model)})`:'')+
+       ` · source=${esc(lp.candidate_source||res.source||'?')}`+
+       ` · propose_ran=${lp.propose_ran?'yes':'no'}`+
+       ` · pubmed_iters=${esc(String(lp.pubmed_evidence_iterations??'—'))}`+
+       ` · retrieved_pmids=${esc(String(lp.n_pmids_retrieved??'—'))}`+
+       ` · supporting_pmids=${esc(String(lp.n_supporting_pmids??res.n_citations??0))}`+
+       ` · articles_verified=${esc(String(lp.n_articles_verified??'—'))}`+
+       (lp.verified_by&&lp.verified_by.length?` · verified_by=${esc(lp.verified_by.join(','))}`:'')+
+       (lp.degraded?' · <b style="color:var(--amber)">degraded</b>':'');
+  }
+  h+=`</div></div>`;
   out.innerHTML=h;
   disc.textContent=res.disclaimer||'';
 }
